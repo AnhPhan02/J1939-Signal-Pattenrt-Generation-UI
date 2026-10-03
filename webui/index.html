@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>J1939 Intelligent Waveform & Signal Verification Hub</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="neu-card header-banner compact">
+            <div class="header-center">
+                <div class="badge-pill neu-outset">
+                    <span class="pulse-dot"></span>
+                    <span class="badge-text">SAE J1939-21 / J1939-71 &bull; STM32F103 &rarr; CAN &rarr; TSMaster</span>
+                </div>
+                <h1 class="main-title">J1939 Pattern Generator &amp; TX/RX Verification</h1>
+            </div>
+        </header>
+
+        <!-- HARDWARE CONNECTION & CONFIGURATION BAR -->
+        <section class="neu-card hardware-strip">
+            <div class="hw-group">
+                <label class="control-label"><i class="icon">🔌</i> STM32 Target Port</label>
+                <div class="select-with-action">
+                    <select id="comPortSelect" class="neu-select">
+                        <option value="">Detecting serial ports...</option>
+                    </select>
+                    <button id="refreshPortsBtn" class="neu-btn icon-btn" title="Refresh available COM ports">🔄</button>
+                </div>
+            </div>
+
+            <div class="hw-group">
+                <label class="control-label"><i class="icon">⚡</i> Serial Baud</label>
+                <select id="serialBaudSelect" class="neu-select">
+                    <option value="115200" selected>115200 (Firmware default)</option>
+                    <option value="9600">9600</option>
+                    <option value="57600">57600</option>
+                    <option value="230400">230400</option>
+                </select>
+            </div>
+
+            <div class="hw-group">
+                <label class="control-label"><i class="icon">📡</i> CAN Bus Bitrate</label>
+                <div class="segmented-toggle neu-inset" id="canBaudToggle">
+                    <button class="seg-btn active" data-baud="250">250 kbps</button>
+                    <button class="seg-btn" data-baud="500">500 kbps</button>
+                </div>
+            </div>
+
+            <div class="hw-group connect-actions">
+                <button id="connectBtn" class="neu-btn primary-btn">
+                    <span class="btn-icon">⚡</span>
+                    <span class="btn-text">Connect Device</span>
+                </button>
+                <div id="connStatusPill" class="status-pill offline">
+                    <span class="status-dot"></span>
+                    <span class="status-label">DISCONNECTED</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- TOP REAL-TIME CAN BUS .TXT LOG RECORDER & CONFIGURATION MANAGER STRIP -->
+        <section class="neu-card top-log-toolbar-strip">
+            <div class="top-log-header">
+                <div class="log-title-group">
+                    <span class="log-icon">📜</span>
+                    <div>
+                        <strong class="log-main-title">Real-Time CAN Bus .TXT Log Recorder & Comparison Manager</strong>
+                        <span class="log-sub-title">Record, stream, download, and compare millisecond-accurate CAN bus trace logs (.txt)</span>
+                    </div>
+                </div>
+                <div class="top-log-actions">
+                    <div id="recStatusPill" class="rec-status-pill hidden">
+                        <span class="rec-dot"></span>
+                        <span id="recStatusText" class="rec-text">RECORDING: 0 lines (0.0s)</span>
+                    </div>
+                    <button id="topToggleRecBtn" class="neu-btn record-btn" title="Start or Stop real-time continuous .txt log recording">
+                        <span id="topRecIcon" class="btn-icon">🔴</span>
+                        <span id="topRecText" class="btn-text">Start Recording (.txt)</span>
+                    </button>
+                    <button id="topDownloadTxtLogBtn" class="neu-btn primary-btn" title="Download recorded real-time CAN trace log as .txt file">
+                        <span class="btn-icon">💾</span>
+                        <span class="btn-text">Download .TXT Log</span>
+                    </button>
+                    <button id="topLogConfigBtn" class="neu-btn" title="Snapshot input configuration state">
+                        <span class="btn-icon">📸</span>
+                        <span class="btn-text">Log Input Config</span>
+                    </button>
+                    <button id="topCompareLogBtn" class="neu-btn" title="Compare recorded logs or configuration snapshots side-by-side">
+                        <span class="btn-icon">📊</span>
+                        <span class="btn-text">Compare Logs</span>
+                    </button>
+                    <button id="topClearLogBtn" class="neu-btn text-danger" title="Clear log buffer memory">
+                        <span class="btn-icon">🗑️</span>
+                        <span class="btn-text">Clear Buffer</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- EXPANDABLE LOG HISTORY & DIFF VIEW PANEL -->
+            <div id="topInputLogPanel" class="top-log-panel hidden">
+                <div id="logHistoryList" class="log-history-list"></div>
+                <div id="logDiffContainer" class="log-diff-container hidden"></div>
+            </div>
+        </section>
+
+        <!-- MAIN WORKSPACE SPLIT -->
+        <div class="workspace-grid">
+            <!-- LEFT PANEL: TEST CONTROLS & SPN EXPLORER -->
+            <main class="left-workspace">
+                <!-- EXECUTION & TIMING MODE CONTROL -->
+                <div class="neu-card control-deck">
+                    <div class="deck-header">
+                        <div class="deck-title-group">
+                            <span class="deck-icon">⚙️</span>
+                            <div>
+                                <h3 class="deck-title">Verification Strategy & Timing Mode</h3>
+                                <p class="deck-desc">Select SAE-standard broadcast intervals or high-stress cycle timing</p>
+                            </div>
+                        </div>
+                        <div class="timing-mode-switch neu-inset">
+                            <button class="mode-btn active" data-mode="0" id="modeSmoothBtn">
+                                <span class="mode-tag">HIGH FIDELITY</span>
+                                <span class="mode-name">Smooth Waveform (50 Hz)</span>
+                            </button>
+                            <button class="mode-btn" data-mode="1" id="modeSaeBtn">
+                                <span class="mode-tag">SAE J1939-71</span>
+                                <span class="mode-name">Standard Compliance</span>
+                            </button>
+                            <button class="mode-btn" data-mode="2" id="modeStressBtn">
+                                <span class="mode-tag">HIGH FREQUENCY</span>
+                                <span class="mode-name">Stress Testing (100 Hz)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="timing-parameters-row">
+                        <div class="param-box">
+                            <label class="param-label">Test Duration</label>
+                            <div class="duration-presets">
+                                <button class="neu-chip active" data-dur="0">Continuous (∞)</button>
+                                <button class="neu-chip" data-dur="10">10s</button>
+                                <button class="neu-chip" data-dur="30">30s</button>
+                                <button class="neu-chip" data-dur="60">60s</button>
+                                <button class="neu-chip" data-dur="120">120s</button>
+                                <div class="custom-dur-wrap">
+                                    <input type="number" id="customDurationInput" class="neu-input dur-input" placeholder="Sec" min="1">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="param-box presets-box">
+                            <label class="param-label">Quick Verification Suites</label>
+                            <div class="suite-pills">
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Sine">∿ All 52 Sine</button>
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Ramp">📈 All 52 Ramp</button>
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Triangle">🔺 All 52 Triangle</button>
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Step">🪜 All 52 Step</button>
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Square">⎍ All 52 Square</button>
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Noise">〰 All 52 Noise</button>
+                                <button class="neu-chip preset-btn neu-accent" id="presetAll52Constant">━ All 52 Constant</button>
+                                <button class="neu-chip preset-btn" id="presetPowertrain">🚗 Powertrain Sweep</button>
+                                <button class="neu-chip preset-btn" id="presetSpn190Stress">🔥 SPN 190 Stress</button>
+                                <button class="neu-chip preset-btn" id="presetEmissions">💨 Emissions & SCR</button>
+                                <button class="neu-chip preset-btn" id="presetSelectAll">⭐ Select All (52)</button>
+                                <button class="neu-chip preset-btn text-danger" id="presetClearAll">✕ Clear</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ACTION BUTTONS -->
+                    <div class="action-launch-bar">
+                        <button id="startGeneratorBtn" class="neu-btn launch-btn">
+                            <span class="launch-icon">▶</span>
+                            <span class="launch-text">START SIGNAL GENERATOR</span>
+                        </button>
+                        <button id="stopGeneratorBtn" class="neu-btn stop-btn">
+                            <span class="launch-icon">⏹</span>
+                            <span class="launch-text">HALT TRANSMISSION</span>
+                        </button>
+                        <button id="resetSystemBtn" class="neu-btn reset-btn" title="Reset system state">
+                            <span class="launch-icon">🔄</span>
+                            <span class="launch-text">RESET</span>
+                        </button>
+                    </div>
+                    <label class="txlog-toggle" title="Firmware prints one $TX line per CAN frame so the server can pair it with the frame TSMaster received">
+                        <input type="checkbox" id="txLogToggle" checked>
+                        <span>Record per-frame <code>$TX</code> log for TX ↔ RX validation</span>
+                    </label>
+
+                    <!-- CAN DATABASE (DBC) EXPORT & TOOL INTEGRATION -->
+                    <div class="dbc-export-strip neu-inset">
+                        <div class="dbc-info-area">
+                            <div class="dbc-badge-line">
+                                <span class="dbc-tag-pill">CAN DATABASE (.DBC) GENERATOR</span>
+                                <span class="dbc-compat-text">Vector CANoe &bull; TSMaster &bull; PCAN &bull; Wireshark &bull; SavvyCAN</span>
+                            </div>
+                            <p class="dbc-subtext">Generate and download standard SAE J1939 CAN database files synchronized with your active waveform profiles and timing modes.</p>
+                        </div>
+                        <div class="dbc-btn-group">
+                            <button id="downloadActiveDbcBtn" class="neu-btn dbc-download-btn active-dbc-btn" title="Download DBC containing active signals and custom waveform parameters">
+                                <span class="btn-icon">📥</span>
+                                <span class="btn-text">Download Active DBC</span>
+                            </button>
+                            <button id="downloadFullDbcBtn" class="neu-btn dbc-download-btn full-dbc-btn" title="Download complete SAE J1939 DBC containing all 52 signals">
+                                <span class="btn-icon">📦</span>
+                                <span class="btn-text">Full 52-SPN DBC</span>
+                            </button>
+                            <button id="previewDbcBtn" class="neu-btn dbc-preview-btn" title="Preview DBC syntax and message layout">
+                                <span class="btn-icon">👁️</span>
+                                <span class="btn-text">Preview</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 52 SPN DATABASE EXPLORER & PATTERN DESIGNER -->
+                <div class="neu-card spn-explorer-card">
+                    <div class="explorer-header">
+                        <div class="search-filter-box">
+                            <div class="search-input-wrap neu-inset">
+                                <span class="search-icon">🔍</span>
+                                <input type="text" id="spnSearchInput" class="search-field" placeholder="Search by SPN #, Name, PGN (e.g. 190, Speed, 61444)...">
+                            </div>
+                            <div class="selection-counter neu-flat">
+                                <span id="selectedCount">0</span> of <span id="totalSpnCount">52</span> SPNs Active
+                            </div>
+                        </div>
+
+                        <!-- BATCH PATTERN CONTROL STRIP -->
+                        <div class="batch-pattern-bar neu-inset">
+                            <div class="batch-label-group">
+                                <span class="batch-icon">⚡</span>
+                                <div class="batch-text-col">
+                                    <strong class="batch-main-label">Batch Waveform Controller</strong>
+                                    <span class="batch-sub-label">Apply identical pattern & period across all 52 SPNs</span>
+                                </div>
+                            </div>
+                            <div class="batch-action-group">
+                                <select id="batchWaveformSelect" class="neu-select batch-select" title="Choose batch pattern">
+                                    <option value="2" selected>∿ Sine Wave (Continuous Smooth)</option>
+                                    <option value="1">📈 Ramp (Linear Sawtooth Sweep)</option>
+                                    <option value="3">🔺 Triangle Wave (Symmetric Sweep)</option>
+                                    <option value="4">🪜 Step Function (Discrete Staircase)</option>
+                                    <option value="5">⎍ Square / Pulse Wave (50% Duty)</option>
+                                    <option value="6">〰 Random Walk (Stochastic Noise)</option>
+                                    <option value="0">━ Constant Value (Flat DC)</option>
+                                </select>
+                                <div class="batch-param-cell">
+                                    <span class="batch-param-tag">Period:</span>
+                                    <div class="sec-stepper">
+                                        <input type="text" inputmode="decimal" autocomplete="off" id="batchParamInput" class="neu-input batch-param-input sec-input" value="10.0" title="Waveform period in seconds">
+                                        <div class="sec-step-btns">
+                                            <button type="button" class="sec-step" data-dir="1" tabindex="-1" title="+0.5 s">▲</button>
+                                            <button type="button" class="sec-step" data-dir="-1" tabindex="-1" title="-0.5 s">▼</button>
+                                        </div>
+                                    </div>
+                                    <span class="batch-param-unit">s</span>
+                                </div>
+                                <button id="batchApplyAllBtn" class="neu-btn primary-btn batch-apply-btn" title="Set all 52 SPNs to this waveform and select them">
+                                    <span>⚡ Set ALL 52 SPNs</span>
+                                </button>
+                                <button id="batchApplySelectedBtn" class="neu-btn batch-apply-btn" title="Apply to currently checked SPNs">
+                                    <span>Apply to Selected</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- PRO BATCH TIMEFRAME SCHEDULER -->
+                        <div class="batch-timeframe-bar neu-inset">
+                            <div class="batch-label-group">
+                                <span class="batch-icon">⏱️</span>
+                                <div class="batch-text-col">
+                                    <strong class="batch-main-label">Batch Timeframe Scheduler</strong>
+                                    <span class="batch-sub-label">Broadcast cycle time & test timeframe windows</span>
+                                </div>
+                            </div>
+                            <div class="batch-timeframe-actions">
+                                <div class="timeframe-presets-group">
+                                    <span class="batch-param-tag">Cycle:</span>
+                                    <button class="neu-chip tf-quick-btn" data-tf="10">10ms (100Hz)</button>
+                                    <button class="neu-chip tf-quick-btn active" data-tf="20">20ms (50Hz)</button>
+                                    <button class="neu-chip tf-quick-btn" data-tf="50">50ms (20Hz)</button>
+                                    <button class="neu-chip tf-quick-btn" data-tf="100">100ms (10Hz)</button>
+                                    <button class="neu-chip tf-quick-btn" data-tf="500">500ms (2Hz)</button>
+                                    <button class="neu-chip tf-quick-btn" data-tf="1000">1000ms (1Hz)</button>
+                                    <div class="custom-tf-input-wrap">
+                                        <input type="number" id="batchCustomTfInput" class="neu-input batch-tf-input" placeholder="ms" min="5" max="5000">
+                                        <span class="batch-param-unit">ms</span>
+                                    </div>
+                                </div>
+                                <div class="timeframe-apply-group">
+                                    <button id="batchApplyTfAllBtn" class="neu-btn primary-btn tf-apply-btn" title="Apply timeframe cycle to all 52 SPNs">
+                                        <span>⚡ Set All Cycles</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- PRO VIEW MODE SWITCHER & BUS LOAD STRIP -->
+                        <div class="view-mode-bar">
+                            <div class="view-mode-tabs neu-inset" id="viewModeTabs">
+                                <button class="view-tab active" data-view="cards" id="viewCardsBtn">
+                                    <span class="view-tab-icon">🎴</span>
+                                    <span class="view-tab-label">Cards Grid</span>
+                                </button>
+                                <button class="view-tab" data-view="matrix" id="viewMatrixBtn">
+                                    <span class="view-tab-icon">📊</span>
+                                    <span class="view-tab-label">Pro Timeframe Matrix</span>
+                                    <span class="view-tab-tag">Dense Table</span>
+                                </button>
+                                <button class="view-tab" data-view="pcan" id="viewPcanBtn">
+                                    <span class="view-tab-icon">⚡</span>
+                                    <span class="view-tab-label">Frame Preview</span>
+                                    <span class="view-tab-tag">Simulated in browser</span>
+                                </button>
+                                <button class="view-tab" data-view="validation" id="viewValidationBtn">
+                                    <span class="view-tab-icon">✅</span>
+                                    <span class="view-tab-label">TX ↔ RX Validation</span>
+                                    <span class="view-tab-tag">STM32 log vs TSMaster</span>
+                                </button>
+                            </div>
+                            <div class="bus-load-indicator-inline neu-flat" id="busLoadInline" title="Estimated CAN bus utilization based on active PGN transmission rates">
+                                <span class="load-label">Est. CAN Bus Load:</span>
+                                <div class="load-bar-wrap neu-inset">
+                                    <div class="load-bar-fill" id="loadBarFill" style="width: 14%;"></div>
+                                </div>
+                                <span class="load-percent" id="loadPercentText">14.2%</span>
+                                <span class="load-status normal" id="loadStatusTag">OPTIMAL</span>
+                            </div>
+                        </div>
+
+                        <!-- CATEGORY FILTER CHIPS -->
+                        <div class="category-tabs" id="categoryTabs">
+                            <button class="cat-tab active" data-cat="all">All Signals (<span id="catCountAll">52</span>)</button>
+                            <button class="cat-tab" data-cat="Engine Control">Engine Control</button>
+                            <button class="cat-tab" data-cat="Transmission">Transmission</button>
+                            <button class="cat-tab" data-cat="Brakes">Brakes</button>
+                            <button class="cat-tab" data-cat="Vehicle Motion">Vehicle Motion</button>
+                            <button class="cat-tab" data-cat="Aftertreatment (SCR/DPF)">SCR / DPF</button>
+                            <button class="cat-tab" data-cat="Fluids & Temperatures">Fluids & Temps</button>
+                            <button class="cat-tab" data-cat="Electrical & Dashboard">Electrical & Dash</button>
+                        </div>
+                    </div>
+
+                    <!-- VIEW 1: DYNAMIC SPN LIST CARDS -->
+                    <div class="spn-cards-container" id="spnCardsContainer">
+                        <div class="empty-loading-state">
+                            <span class="spinner"></span>
+                            <p>Loading 52 J1939 SPN definitions...</p>
+                        </div>
+                    </div>
+
+                    <!-- VIEW 2: PRO TIMEFRAME MATRIX (DENSE ENGINEERING TABLE) -->
+                    <div class="spn-matrix-container hidden" id="spnMatrixContainer">
+                        <div class="matrix-table-wrap neu-inset">
+                            <table class="pro-matrix-table" id="matrixTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 42px;"><input type="checkbox" id="matrixSelectAll" title="Select All"></th>
+                                        <th style="width: 75px;">SPN</th>
+                                        <th style="width: 75px;">PGN</th>
+                                        <th>Signal Description</th>
+                                        <th style="width: 170px;">Waveform Pattern</th>
+                                        <th style="width: 100px;">Min</th>
+                                        <th style="width: 100px;">Max</th>
+                                        <th style="width: 90px;">Period (s)</th>
+                                        <th style="width: 140px;">Timeframe (Cycle)</th>
+                                        <th style="width: 85px;">Start (s)</th>
+                                        <th style="width: 85px;">Dur (s)</th>
+                                        <th style="width: 80px;">Rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="matrixTableBody">
+                                    <!-- Populated dynamically by app.js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- VIEW 3: TSMaster & PCAN-VIEW CAN BUS ANALYZER & DATA FIELD INSPECTOR -->
+                    <div class="spn-pcan-container hidden" id="spnPcanContainer">
+                        <!-- TOP TRACE CONTROLS TOOLBAR -->
+                        <div class="pcan-control-deck neu-flat">
+                            <div class="pcan-status-group">
+                                <span class="pcan-badge online"><span class="pcan-dot"></span> CAN1: 500 kbps (J1939-21)</span>
+                                <span class="pcan-badge" id="pcanFrameCounterBadge">Total Frames: 0</span>
+                                <span class="pcan-badge" id="pcanFpsBadge">Rate: 0 fps</span>
+                            </div>
+
+                            <div class="pcan-action-group">
+                                <button id="pcanPauseTraceBtn" class="neu-btn pcan-btn" title="Pause or Resume Real-Time CAN Frame Logging">
+                                    <span id="pcanPauseIcon">⏸</span> <span id="pcanPauseText">Pause Trace</span>
+                                </button>
+                                <button id="pcanClearTraceBtn" class="neu-btn pcan-btn" title="Clear Trace Window">
+                                    <span>🗑️ Clear</span>
+                                </button>
+                                <button id="pcanAutoScrollBtn" class="neu-btn pcan-btn active" title="Toggle Auto-Scroll to Latest Frames">
+                                    <span>📜 Auto-Scroll</span>
+                                </button>
+                        <button id="logInputBtn" class="neu-btn primary-btn" title="Log current input configuration for later comparison"><span class="btn-icon">🗂️</span><span class="btn-text">Log Input</span></button>
+                            </div>
+                        <div id="inputLogPanel" class="hidden" style="margin-top:10px; padding:10px; border:1px solid #ccc; background:#f9f9f9; max-height:200px; overflow:auto;"></div>
+</div>
+
+                        <!-- ADVANCED CLEAR VIEWING: STEP-BY-STEP CAN SIGNAL TRANSMISSION PIPELINE FOR NON-CAN FIELD USERS -->
+                        <div class="non-can-explainer-card neu-inset" id="nonCanExplainerCard">
+                            <div class="explainer-header">
+                                <div class="explainer-title-group">
+                                    <span class="explainer-badge">🎓 CLEAR NON-CAN VISUAL GUIDE</span>
+                                    <h4 class="explainer-title">How Physical SPN Signals Travel Over CAN Bus (Millisecond Precision)</h4>
+                                    <p class="explainer-desc">Interactive step-by-step breakdown showing how physical sensor data translates into 29-bit CAN frames and millisecond timestamps.</p>
+                                </div>
+                            </div>
+                            
+                            <div class="pipeline-steps-container">
+                                <!-- STEP 1 -->
+                                <div class="pipeline-step-card step-1">
+                                    <div class="step-num-badge">STEP 1</div>
+                                    <div class="step-icon">🌡️</div>
+                                    <div class="step-content">
+                                        <strong class="step-title">SPN Physical Signal</strong>
+                                        <span class="step-value" id="expStep1Val">SPN 190: 1500.00 RPM</span>
+                                        <p class="step-explain">Sensor measurement created by vehicle ECU.</p>
+                                    </div>
+                                    <div class="step-arrow">➔</div>
+                                </div>
+
+                                <!-- STEP 2 -->
+                                <div class="pipeline-step-card step-2">
+                                    <div class="step-num-badge">STEP 2</div>
+                                    <div class="step-icon">🔢</div>
+                                    <div class="step-content">
+                                        <strong class="step-title">Hex Encoding Math</strong>
+                                        <span class="step-value" id="expStep2Val">Raw = 0x3A98 (14999)</span>
+                                        <p class="step-explain">(Physical - Offset) / Scale to hex bytes.</p>
+                                    </div>
+                                    <div class="step-arrow">➔</div>
+                                </div>
+
+                                <!-- STEP 3 -->
+                                <div class="pipeline-step-card step-3">
+                                    <div class="step-num-badge">STEP 3</div>
+                                    <div class="step-icon">📦</div>
+                                    <div class="step-content">
+                                        <strong class="step-title">64-Bit Data Payload</strong>
+                                        <span class="step-value" id="expStep3Val">PGN 61444 Bytes 4..5</span>
+                                        <p class="step-explain">Packs up to 8 bytes (64 bits) into 1 payload.</p>
+                                    </div>
+                                    <div class="step-arrow">➔</div>
+                                </div>
+
+                                <!-- STEP 4 -->
+                                <div class="pipeline-step-card step-4">
+                                    <div class="step-num-badge">STEP 4</div>
+                                    <div class="step-icon">🏷️</div>
+                                    <div class="step-content">
+                                        <strong class="step-title">29-Bit CAN Header</strong>
+                                        <span class="step-value" id="expStep4Val">0x0CF00400 (Prio 3)</span>
+                                        <p class="step-explain">Priority + PGN + Source Address address tag.</p>
+                                    </div>
+                                    <div class="step-arrow">➔</div>
+                                </div>
+
+                                <!-- STEP 5 -->
+                                <div class="pipeline-step-card step-5">
+                                    <div class="step-num-badge">STEP 5</div>
+                                    <div class="step-icon">⏱️</div>
+                                    <div class="step-content">
+                                        <strong class="step-title">ms Transmission</strong>
+                                        <span class="step-value" id="expStep5Val">t = 12450.0 ms (&Delta;t = 20ms)</span>
+                                        <p class="step-explain">Exact millisecond timing tick on physical CAN wires.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SPLIT MAIN VIEW: CAN BUS TRACE WINDOW + 64-BIT DATA FIELD BIT-MAPPER -->
+                        <div class="pcan-split-layout">
+                            <!-- LEFT PANEL: HIGH-PRECISION ROLLING CAN BUS TRACE TABLE -->
+                            <div class="pcan-trace-panel neu-inset">
+                                <div class="panel-section-title">
+                                    <span>📡 High-Resolution CAN Bus Trace Monitor (Millisecond Accurate)</span>
+                                    <span class="trace-hint">Click any frame row to inspect bit-level data field</span>
+                                </div>
+                                <div class="pcan-trace-table-wrap" id="pcanTraceTableWrap">
+                                    <table class="pcan-trace-table" id="pcanTraceTable">
+                                        <thead>
+                                            <tr>
+                                                <th style="width: 48px;">#</th>
+                                                <th style="width: 95px;">Time (ms)</th>
+                                                <th style="width: 75px;">&Delta;t (ms)</th>
+                                                <th style="width: 95px;">CAN ID</th>
+                                                <th style="width: 65px;">PGN</th>
+                                                <th style="width: 140px;">PGN Acronym / Name</th>
+                                                <th style="width: 45px;">Dir</th>
+                                                <th style="width: 42px;">DLC</th>
+                                                <th class="data-bytes-header">Data Payload (D0 .. D7 Hex)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="pcanTraceBody">
+                                            <!-- Dynamic CAN frame rows populated at high frequency -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- RIGHT PANEL: 64-BIT DATA FIELD BIT-MAPPER & FORMULA DECODER -->
+                            <div class="pcan-inspector-panel neu-flat" id="pcanInspectorPanel">
+                                <div class="inspector-header">
+                                    <div class="inspector-pgn-badge-row">
+                                        <span class="inspector-badge-prio" id="insPrioBadge">PRIO: 3</span>
+                                        <span class="inspector-badge-pgn" id="insPgnBadge">PGN 61444 (0xF004)</span>
+                                        <span class="inspector-badge-sa" id="insSaBadge">SA: 0x00</span>
+                                        <span class="inspector-badge-cycle" id="insCycleBadge">Cycle: 20 ms (50 Hz)</span>
+                                    </div>
+                                    <h4 class="inspector-title" id="insPgnTitle">EEC1 - Electronic Engine Controller 1</h4>
+                                </div>
+
+                                <!-- RAW 8-BYTE HEX & ASCII DISPLAY -->
+                                <div class="inspector-raw-bytes-strip neu-inset" id="insRawBytesStrip">
+                                    <!-- Dynamic 8 hex bytes with visual color glow -->
+                                </div>
+
+                                <!-- 64-BIT PAYLOAD BIT-MAP MATRIX (TSMaster & PCAN-Explorer Signature) -->
+                                <div class="bit-matrix-wrapper">
+                                    <div class="bit-matrix-label-row">
+                                        <span class="matrix-title">64-Bit Data Field Matrix &amp; SPN Bit-Mapping</span>
+                                        <span class="matrix-hint">Bytes 1..8 &bull; Bits 0..63 (Little-Endian / Intel)</span>
+                                    </div>
+                                    <div class="bit-matrix-grid neu-inset" id="bitMatrixGrid">
+                                        <!-- 8 columns x 8 rows matrix rendered dynamically -->
+                                    </div>
+                                </div>
+
+                                <!-- MATHEMATICAL FORMULA DECODE & ENGINEERING UNITS BREAKDOWN -->
+                                <div class="inspector-signals-container">
+                                    <div class="signals-list-header">
+                                        <span>Packaged SPN Physical Signals &amp; Decoding Formulas</span>
+                                    </div>
+                                    <div class="inspector-signals-list" id="insSignalsList">
+                                        <!-- Dynamic cards showing Raw -> Formula -> Physical Value -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TX <-> RX VALIDATION (STM32 $TX log vs TSMaster RX) -->
+                    <div class="spn-validation-container hidden" id="spnValidationContainer">
+                        <div class="val-head">
+                            <div>
+                                <h3 class="val-title">TX ↔ RX Correlation</h3>
+                                <p class="val-sub" id="valSub">STM32 <code>$TX</code> UART log paired with TSMaster RX frames (bridge 127.0.0.1:29501)</p>
+                            </div>
+                            <div class="val-actions">
+                                <span class="pcan-badge" id="valLockBadge">Clock: not locked</span>
+                                <button id="valResetBtn" class="neu-btn pcan-btn" title="Clear correlation counters">Reset</button>
+                                <button id="valExportBtn" class="neu-btn primary-btn pcan-btn" title="Download per-frame verdicts">Export CSV</button>
+                            </div>
+                        </div>
+                        <div class="val-kpis" id="valKpis"></div>
+                        <div class="val-grid">
+                            <div class="val-panel">
+                                <h4 class="val-panel-title">Period per CAN ID (TX log vs RX)</h4>
+                                <div class="val-table-wrap">
+                                    <table class="val-table">
+                                        <thead><tr><th>CAN ID</th><th>PGN</th><th>TX mean</th><th>RX mean</th><th>RX std</th><th>RX min..max</th><th>Frames</th></tr></thead>
+                                        <tbody id="valPeriodBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="val-panel">
+                                <h4 class="val-panel-title">SPN value check (decoded RX vs firmware formula)</h4>
+                                <div class="val-table-wrap">
+                                    <table class="val-table">
+                                        <thead><tr><th>SPN</th><th>Name</th><th>Last RX</th><th>Expected</th><th>OK</th><th>Fail</th></tr></thead>
+                                        <tbody id="valSpnBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="val-panel">
+                            <h4 class="val-panel-title">Latest anomalies (LOST / MISMATCH / UNEXPECTED / UNLOGGED)</h4>
+                            <div class="val-table-wrap tall">
+                                <table class="val-table mono">
+                                    <thead><tr><th>Verdict</th><th>Seq</th><th>CAN ID</th><th>t_tx (ms)</th><th>TX data</th><th>RX data</th><th>Diff bytes</th></tr></thead>
+                                    <tbody id="valEventBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <!-- RIGHT PANEL: WAVEFORM VISUALIZER & LIVE SERIAL MONITOR -->
+            <aside class="right-workspace">
+                <!-- INTERACTIVE WAVEFORM SIMULATOR PREVIEW -->
+                <div class="neu-card visualizer-card">
+                    <div class="card-mini-head">
+                        <span class="mini-icon">📈</span>
+                        <div>
+                            <h4 class="mini-title">Real-Time Waveform Synthesizer</h4>
+                            <p class="mini-sub" id="activeWaveformLabel">Live mathematical pattern preview</p>
+                        </div>
+                    </div>
+                    <div class="canvas-wrapper neu-inset">
+                        <canvas id="waveformCanvas" width="480" height="190"></canvas>
+                        <div class="canvas-overlay-data">
+                            <span class="data-badge" id="canvasMinBadge">Min: 0.0</span>
+                            <span class="data-badge" id="canvasCurrentBadge">Instant: 0.0</span>
+                            <span class="data-badge" id="canvasMaxBadge">Max: 100.0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- EMBEDDED LIVE SERIAL MONITOR -->
+                <div class="neu-card serial-monitor-card">
+                    <div class="monitor-header">
+                        <div class="monitor-title-wrap">
+                            <span class="terminal-dot green"></span>
+                            <span class="terminal-dot yellow"></span>
+                            <span class="terminal-dot red"></span>
+                            <h4 class="monitor-title">STM32 Live Serial Monitor (115200 Baud)</h4>
+                        </div>
+                        <div class="monitor-tools">
+                            <button id="autoScrollToggle" class="tool-btn active" title="Toggle Auto-Scroll">📜 Auto-Scroll</button>
+                            <button id="clearTerminalBtn" class="tool-btn" title="Clear Console">🧹 Clear</button>
+                            <button id="copyLogsBtn" class="tool-btn" title="Copy Console Logs">📋 Copy</button>
+                        </div>
+                    </div>
+
+                    <div class="terminal-screen neu-inset" id="terminalScreen">
+                        <div class="terminal-welcome">
+                            [SYSTEM] J1939 Verification Web Hub ready.<br>
+                            [SYSTEM] Connect target STM32 device to view streaming telemetry.<br>
+                            -------------------------------------------------------
+                        </div>
+                    </div>
+
+                    <div class="terminal-input-bar">
+                        <div class="term-input-wrap neu-inset">
+                            <span class="term-prompt">&gt;</span>
+                            <input type="text" id="manualCmdInput" class="term-input" placeholder="Type raw serial command (e.g. STATUS, START 30 0)...">
+                        </div>
+                        <button id="sendCmdBtn" class="neu-btn send-btn">Send</button>
+                    </div>
+                </div>
+
+                <!-- FOOTER METRICS -->
+                <div class="neu-card quick-stats-card">
+                    <div class="stat-col">
+                        <span class="stat-num" id="statFrames">0</span>
+                        <span class="stat-name">Frames Sent</span>
+                    </div>
+                    <div class="stat-col">
+                        <span class="stat-num" id="statBusLoad">14.2%</span>
+                        <span class="stat-name">Bus Load</span>
+                    </div>
+                    <div class="stat-col">
+                        <span class="stat-num" id="statBaud">250</span>
+                        <span class="stat-name">CAN kbps</span>
+                    </div>
+                    <div class="stat-col">
+                        <span class="stat-num" id="statActivePgns">0</span>
+                        <span class="stat-name">Active PGNs</span>
+                    </div>
+                    <div class="stat-col">
+                        <span class="stat-num" id="statMode">Smooth</span>
+                        <span class="stat-name">Timing Mode</span>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <footer class="app-footer">
+            <p>J1939 Signal Generator &amp; Verification System</p>
+        </footer>
+    </div>
+
+    <!-- DBC PREVIEW & EXPORT MODAL -->
+    <div id="dbcModal" class="modal-backdrop hidden">
+        <div class="modal-card neu-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="modal-icon">📄</span>
+                    <div>
+                        <h3 class="modal-title" id="dbcModalTitle">Vector DBC CAN Database Preview</h3>
+                        <p class="modal-sub" id="dbcModalSubtitle">SAE J1939 Compliant Specification File</p>
+                    </div>
+                </div>
+                <button id="closeDbcModalBtn" class="neu-btn modal-close-btn" title="Close Modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="dbc-meta-strip neu-inset">
+                    <span id="dbcMetaScope" class="meta-tag">Scope: Active Config</span>
+                    <span id="dbcMetaSignals" class="meta-tag">Signals: 0</span>
+                    <span id="dbcMetaTiming" class="meta-tag">Timing: SAE Standard</span>
+                    <span id="dbcMetaBaud" class="meta-tag">Baud: 500 kbps</span>
+                </div>
+                <div class="dbc-code-viewer-wrap neu-inset">
+                    <pre><code id="dbcCodeBlock" class="dbc-code">Generating DBC syntax...</code></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="copyDbcTextBtn" class="neu-btn copy-dbc-btn">
+                    <span>📋 Copy DBC Content</span>
+                </button>
+                <button id="modalDownloadDbcBtn" class="neu-btn primary-btn download-modal-btn">
+                    <span>📥 Download .DBC File</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=4.0"></script>
+</body>
+</html>

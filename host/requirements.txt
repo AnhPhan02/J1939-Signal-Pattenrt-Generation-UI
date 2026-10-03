@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+pyserial
+# optional: DBC checks / direct CAN capture
+cantools
+python-can
