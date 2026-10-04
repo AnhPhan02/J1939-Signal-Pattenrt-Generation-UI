@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mode: 'SAE'
     },
     inputLog: [], // Stores snapshots of input configuration
-    isRecordingTxtLog: false, // Flag for real-time .txt recording
+    isRecordingTxtLog: false, // Flag for browser-simulated .txt recording
     recordedTxtLines: [], // Continuous .txt log buffer
     recordingStartTime: 0
 };
@@ -759,7 +759,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const uniquePgns = new Set(state.spns.map(s => s.pgn));
         const sortedPgns = Array.from(uniquePgns).sort((a, b) => a - b);
 
-        filterSelect.innerHTML = '<option value="all">All Transmitting PGNs (CAN1 Trace)</option>';
+        filterSelect.innerHTML = '<option value="all">All simulated PGNs</option>';
         sortedPgns.forEach(pgn => {
             const meta = PGN_METADATA[pgn] || { acronym: `PGN_${pgn}`, name: `J1939 PGN ${pgn}` };
             const opt = document.createElement('option');
@@ -886,7 +886,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (recStatusPill && recStatusText) {
                             recStatusPill.classList.remove('hidden');
                             const recElapsedSec = (now - state.recordingStartTime) / 1000.0;
-                            recStatusText.textContent = `RECORDING LIVE: ${state.recordedTxtLines.length} lines (${recElapsedSec.toFixed(1)}s)`;
+                            recStatusText.textContent = `SIMULATED PREVIEW: ${state.recordedTxtLines.length} lines (${recElapsedSec.toFixed(1)}s)`;
                         }
                     }
 
@@ -1677,12 +1677,12 @@ document.addEventListener('DOMContentLoaded', () => {
             state.recordedTxtLines = [];
             state.recordingStartTime = Date.now();
             if (recIcon) recIcon.textContent = '⏹️';
-            if (recText) recText.textContent = 'Stop Recording (.txt)';
+            if (recText) recText.textContent = 'Stop Preview Recording';
             if (recBtn) recBtn.classList.add('recording-active');
             if (recStatusPill) recStatusPill.classList.remove('hidden');
         } else {
             if (recIcon) recIcon.textContent = '🔴';
-            if (recText) recText.textContent = 'Start Recording (.txt)';
+            if (recText) recText.textContent = 'Record Preview (.txt)';
             if (recBtn) recBtn.classList.remove('recording-active');
             
             if (state.recordedTxtLines.length > 0) {
@@ -1722,7 +1722,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const filename = `j1939_can_bus_trace_log_${Date.now()}.txt`;
+        const filename = `j1939_simulated_preview_${Date.now()}.txt`;
         a.download = filename;
         document.body.appendChild(a);
         a.click();

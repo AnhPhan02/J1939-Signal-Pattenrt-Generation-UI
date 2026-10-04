@@ -70,8 +70,8 @@
                 <div class="log-title-group">
                     <span class="log-icon">📜</span>
                     <div>
-                        <strong class="log-main-title">Real-Time CAN Bus .TXT Log Recorder & Comparison Manager</strong>
-                        <span class="log-sub-title">Record, stream, download, and compare millisecond-accurate CAN bus trace logs (.txt)</span>
+                        <strong class="log-main-title">Simulated preview TXT log and configuration history</strong>
+                        <span class="log-sub-title">The TXT recorder uses frames generated in this browser. Use Validation for observed CAN frames.</span>
                     </div>
                 </div>
                 <div class="top-log-actions">
@@ -79,13 +79,13 @@
                         <span class="rec-dot"></span>
                         <span id="recStatusText" class="rec-text">RECORDING: 0 lines (0.0s)</span>
                     </div>
-                    <button id="topToggleRecBtn" class="neu-btn record-btn" title="Start or Stop real-time continuous .txt log recording">
+                    <button id="topToggleRecBtn" class="neu-btn record-btn" title="Record simulated preview frames">
                         <span id="topRecIcon" class="btn-icon">🔴</span>
-                        <span id="topRecText" class="btn-text">Start Recording (.txt)</span>
+                        <span id="topRecText" class="btn-text">Record Preview (.txt)</span>
                     </button>
-                    <button id="topDownloadTxtLogBtn" class="neu-btn primary-btn" title="Download recorded real-time CAN trace log as .txt file">
+                    <button id="topDownloadTxtLogBtn" class="neu-btn primary-btn" title="Download simulated preview frames as TXT">
                         <span class="btn-icon">💾</span>
-                        <span class="btn-text">Download .TXT Log</span>
+                        <span class="btn-text">Download Preview TXT</span>
                     </button>
                     <button id="topLogConfigBtn" class="neu-btn" title="Snapshot input configuration state">
                         <span class="btn-icon">📸</span>
@@ -388,13 +388,13 @@
                         <!-- TOP TRACE CONTROLS TOOLBAR -->
                         <div class="pcan-control-deck neu-flat">
                             <div class="pcan-status-group">
-                                <span class="pcan-badge online"><span class="pcan-dot"></span> CAN1: 500 kbps (J1939-21)</span>
+                                <span class="pcan-badge online"><span class="pcan-dot"></span> Browser simulation · J1939 frame preview</span>
                                 <span class="pcan-badge" id="pcanFrameCounterBadge">Total Frames: 0</span>
                                 <span class="pcan-badge" id="pcanFpsBadge">Rate: 0 fps</span>
                             </div>
 
                             <div class="pcan-action-group">
-                                <button id="pcanPauseTraceBtn" class="neu-btn pcan-btn" title="Pause or Resume Real-Time CAN Frame Logging">
+                                <button id="pcanPauseTraceBtn" class="neu-btn pcan-btn" title="Pause or resume simulated frame preview">
                                     <span id="pcanPauseIcon">⏸</span> <span id="pcanPauseText">Pause Trace</span>
                                 </button>
                                 <button id="pcanClearTraceBtn" class="neu-btn pcan-btn" title="Clear Trace Window">
@@ -605,7 +605,7 @@
                     <div class="card-mini-head">
                         <span class="mini-icon">📈</span>
                         <div>
-                            <h4 class="mini-title">Real-Time Waveform Synthesizer</h4>
+                            <h4 class="mini-title">Waveform preview</h4>
                             <p class="mini-sub" id="activeWaveformLabel">Live mathematical pattern preview</p>
                         </div>
                     </div>
