@@ -9,4 +9,5 @@ from j1939hub.server import app
 
 if __name__ == "__main__":
     print("Starting J1939 Verification Web Hub on http://127.0.0.1:8000 ...")
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False,
+                timeout_graceful_shutdown=2)
