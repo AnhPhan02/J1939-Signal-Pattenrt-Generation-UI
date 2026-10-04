@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>J1939 Intelligent Waveform & Signal Verification Hub</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=3.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=4.0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,20 +22,28 @@
             </div>
         </header>
 
+        <nav class="workflow-nav neu-card" aria-label="Main workflow">
+            <button type="button" class="workflow-link active" data-section="configure" aria-current="page">1. Configure</button>
+            <button type="button" class="workflow-link" data-section="run">2. Run</button>
+            <button type="button" class="workflow-link" data-section="validate">3. Validate</button>
+            <button type="button" class="workflow-link" data-section="tools">Tools</button>
+        </nav>
+        <div id="appFeedback" class="app-feedback hidden" role="status" aria-live="polite"></div>
+
         <!-- HARDWARE CONNECTION & CONFIGURATION BAR -->
-        <section class="neu-card hardware-strip">
+        <section class="neu-card hardware-strip" id="connectionSection" aria-label="Device connection">
             <div class="hw-group">
-                <label class="control-label"><i class="icon">🔌</i> STM32 Target Port</label>
+                <label class="control-label" for="comPortSelect"><i class="icon">🔌</i> STM32 Target Port</label>
                 <div class="select-with-action">
                     <select id="comPortSelect" class="neu-select">
                         <option value="">Detecting serial ports...</option>
                     </select>
-                    <button id="refreshPortsBtn" class="neu-btn icon-btn" title="Refresh available COM ports">🔄</button>
+                    <button id="refreshPortsBtn" class="neu-btn icon-btn" aria-label="Refresh serial ports" title="Refresh available COM ports">🔄</button>
                 </div>
             </div>
 
             <div class="hw-group">
-                <label class="control-label"><i class="icon">⚡</i> Serial Baud</label>
+                <label class="control-label" for="serialBaudSelect"><i class="icon">⚡</i> Serial Baud</label>
                 <select id="serialBaudSelect" class="neu-select">
                     <option value="115200" selected>115200 (Firmware default)</option>
                     <option value="9600">9600</option>
@@ -47,8 +55,8 @@
             <div class="hw-group">
                 <label class="control-label"><i class="icon">📡</i> CAN Bus Bitrate</label>
                 <div class="segmented-toggle neu-inset" id="canBaudToggle">
-                    <button class="seg-btn active" data-baud="250">250 kbps</button>
-                    <button class="seg-btn" data-baud="500">500 kbps</button>
+                    <button class="seg-btn active" data-baud="250" aria-pressed="true">250 kbps</button>
+                    <button class="seg-btn" data-baud="500" aria-pressed="false">500 kbps</button>
                 </div>
             </div>
 
@@ -65,7 +73,7 @@
         </section>
 
         <!-- TOP REAL-TIME CAN BUS .TXT LOG RECORDER & CONFIGURATION MANAGER STRIP -->
-        <section class="neu-card top-log-toolbar-strip">
+        <section class="neu-card top-log-toolbar-strip" id="logToolsSection">
             <div class="top-log-header">
                 <div class="log-title-group">
                     <span class="log-icon">📜</span>
@@ -114,25 +122,25 @@
             <!-- LEFT PANEL: TEST CONTROLS & SPN EXPLORER -->
             <main class="left-workspace">
                 <!-- EXECUTION & TIMING MODE CONTROL -->
-                <div class="neu-card control-deck">
+                <div class="neu-card control-deck" id="runSection">
                     <div class="deck-header">
                         <div class="deck-title-group">
                             <span class="deck-icon">⚙️</span>
                             <div>
-                                <h3 class="deck-title">Verification Strategy & Timing Mode</h3>
-                                <p class="deck-desc">Select SAE-standard broadcast intervals or high-stress cycle timing</p>
+                                <h3 class="deck-title">Run settings</h3>
+                                <p class="deck-desc">Choose timing and duration, then start the generator.</p>
                             </div>
                         </div>
                         <div class="timing-mode-switch neu-inset">
-                            <button class="mode-btn active" data-mode="0" id="modeSmoothBtn">
+                            <button class="mode-btn active" data-mode="0" id="modeSmoothBtn" aria-pressed="true">
                                 <span class="mode-tag">HIGH FIDELITY</span>
                                 <span class="mode-name">Smooth Waveform (50 Hz)</span>
                             </button>
-                            <button class="mode-btn" data-mode="1" id="modeSaeBtn">
+                            <button class="mode-btn" data-mode="1" id="modeSaeBtn" aria-pressed="false">
                                 <span class="mode-tag">SAE J1939-71</span>
                                 <span class="mode-name">Standard Compliance</span>
                             </button>
-                            <button class="mode-btn" data-mode="2" id="modeStressBtn">
+                            <button class="mode-btn" data-mode="2" id="modeStressBtn" aria-pressed="false">
                                 <span class="mode-tag">HIGH FREQUENCY</span>
                                 <span class="mode-name">Stress Testing (100 Hz)</span>
                             </button>
@@ -141,7 +149,7 @@
 
                     <div class="timing-parameters-row">
                         <div class="param-box">
-                            <label class="param-label">Test Duration</label>
+                            <label class="param-label" for="customDurationInput">Test Duration</label>
                             <div class="duration-presets">
                                 <button class="neu-chip active" data-dur="0">Continuous (∞)</button>
                                 <button class="neu-chip" data-dur="10">10s</button>
@@ -149,7 +157,7 @@
                                 <button class="neu-chip" data-dur="60">60s</button>
                                 <button class="neu-chip" data-dur="120">120s</button>
                                 <div class="custom-dur-wrap">
-                                    <input type="number" id="customDurationInput" class="neu-input dur-input" placeholder="Sec" min="1">
+                                    <input type="number" id="customDurationInput" class="neu-input dur-input" placeholder="Other seconds" min="1" aria-label="Custom test duration in seconds">
                                 </div>
                             </div>
                         </div>
@@ -172,6 +180,8 @@
                             </div>
                         </div>
                     </div>
+
+                    <p id="runSummary" class="run-summary">1 signal selected · Smooth · Continuous · 250 kbps</p>
 
                     <!-- ACTION BUTTONS -->
                     <div class="action-launch-bar">
@@ -220,12 +230,12 @@
                 </div>
 
                 <!-- 52 SPN DATABASE EXPLORER & PATTERN DESIGNER -->
-                <div class="neu-card spn-explorer-card">
+                <div class="neu-card spn-explorer-card" id="signalSection">
                     <div class="explorer-header">
                         <div class="search-filter-box">
                             <div class="search-input-wrap neu-inset">
                                 <span class="search-icon">🔍</span>
-                                <input type="text" id="spnSearchInput" class="search-field" placeholder="Search by SPN #, Name, PGN (e.g. 190, Speed, 61444)...">
+                                <input type="search" id="spnSearchInput" class="search-field" aria-label="Search signals by SPN, name, or PGN" placeholder="Search SPN, name, or PGN">
                             </div>
                             <div class="selection-counter neu-flat">
                                 <span id="selectedCount">0</span> of <span id="totalSpnCount">52</span> SPNs Active
@@ -348,7 +358,12 @@
                         </div>
                     </div>
 
-                    <!-- VIEW 1: DYNAMIC SPN LIST CARDS -->
+                    <details class="signal-picker" id="signalPicker">
+                        <summary>Add signals <span id="availableCount" class="picker-count">51 available</span></summary>
+                        <div id="signalPickerResults" class="signal-picker-results" aria-label="Available signals"></div>
+                    </details>
+                    <h2 class="selected-heading">Selected signals</h2>
+                    <!-- VIEW 1: SELECTED SIGNAL EDITORS -->
                     <div class="spn-cards-container" id="spnCardsContainer">
                         <div class="empty-loading-state">
                             <span class="spinner"></span>
@@ -362,7 +377,7 @@
                             <table class="pro-matrix-table" id="matrixTable">
                                 <thead>
                                     <tr>
-                                        <th style="width: 42px;"><input type="checkbox" id="matrixSelectAll" title="Select All"></th>
+                                        <th style="width: 42px;"><input type="checkbox" id="matrixSelectAll" aria-label="Select all filtered signals" title="Select All"></th>
                                         <th style="width: 75px;">SPN</th>
                                         <th style="width: 75px;">PGN</th>
                                         <th>Signal Description</th>
@@ -388,7 +403,7 @@
                         <!-- TOP TRACE CONTROLS TOOLBAR -->
                         <div class="pcan-control-deck neu-flat">
                             <div class="pcan-status-group">
-                                <span class="pcan-badge online"><span class="pcan-dot"></span> Browser simulation · J1939 frame preview</span>
+                                <span class="pcan-badge">Browser simulation · J1939 frame preview</span>
                                 <span class="pcan-badge" id="pcanFrameCounterBadge">Total Frames: 0</span>
                                 <span class="pcan-badge" id="pcanFpsBadge">Rate: 0 fps</span>
                             </div>
@@ -601,7 +616,7 @@
             <!-- RIGHT PANEL: WAVEFORM VISUALIZER & LIVE SERIAL MONITOR -->
             <aside class="right-workspace">
                 <!-- INTERACTIVE WAVEFORM SIMULATOR PREVIEW -->
-                <div class="neu-card visualizer-card">
+                    <div class="neu-card visualizer-card">
                     <div class="card-mini-head">
                         <span class="mini-icon">📈</span>
                         <div>
@@ -646,7 +661,7 @@
                     <div class="terminal-input-bar">
                         <div class="term-input-wrap neu-inset">
                             <span class="term-prompt">&gt;</span>
-                            <input type="text" id="manualCmdInput" class="term-input" placeholder="Type raw serial command (e.g. STATUS, START 30 0)...">
+                            <input type="text" id="manualCmdInput" class="term-input" aria-label="Raw serial command" placeholder="Type raw serial command (e.g. STATUS, START 30 0)...">
                         </div>
                         <button id="sendCmdBtn" class="neu-btn send-btn">Send</button>
                     </div>
@@ -656,11 +671,11 @@
                 <div class="neu-card quick-stats-card">
                     <div class="stat-col">
                         <span class="stat-num" id="statFrames">0</span>
-                        <span class="stat-name">Frames Sent</span>
+                        <span class="stat-name">Firmware frames</span>
                     </div>
                     <div class="stat-col">
-                        <span class="stat-num" id="statBusLoad">14.2%</span>
-                        <span class="stat-name">Bus Load</span>
+                        <span class="stat-num" id="statBusLoad">0.0%</span>
+                        <span class="stat-name">Estimated bus load</span>
                     </div>
                     <div class="stat-col">
                         <span class="stat-num" id="statBaud">250</span>
@@ -678,6 +693,17 @@
             </aside>
         </div>
 
+        <section class="neu-card tools-hub hidden" id="toolsSection" aria-labelledby="toolsTitle">
+            <h2 id="toolsTitle">Tools</h2>
+            <p class="tools-intro">Bulk setup, exports, simulation, and diagnostics.</p>
+            <details class="tool-group" id="presetToolGroup"><summary>Presets and batch setup</summary><div id="presetToolContent" class="tool-content"></div></details>
+            <details class="tool-group" id="bulkToolGroup"><summary>Bulk signal editor</summary><div id="bulkToolContent" class="tool-content"><p class="tool-note">Start and duration windows are stored but are not applied by the current firmware.</p></div></details>
+            <details class="tool-group" id="dbcToolGroup"><summary>DBC export</summary><div id="dbcToolContent" class="tool-content"></div></details>
+            <details class="tool-group" id="previewToolGroup"><summary>Simulated frame preview</summary><div id="previewToolContent" class="tool-content"></div></details>
+            <details class="tool-group" id="logToolGroup"><summary>Simulated TXT and configuration history</summary><div id="logToolContent" class="tool-content"></div></details>
+            <details class="tool-group" id="serialToolGroup"><summary>Serial console</summary><div id="serialToolContent" class="tool-content"></div></details>
+        </section>
+
         <footer class="app-footer">
             <p>J1939 Signal Generator &amp; Verification System</p>
         </footer>
@@ -685,7 +711,7 @@
 
     <!-- DBC PREVIEW & EXPORT MODAL -->
     <div id="dbcModal" class="modal-backdrop hidden">
-        <div class="modal-card neu-card">
+        <div class="modal-card neu-card" role="dialog" aria-modal="true" aria-labelledby="dbcModalTitle" tabindex="-1">
             <div class="modal-header">
                 <div class="modal-title-group">
                     <span class="modal-icon">📄</span>
@@ -694,7 +720,7 @@
                         <p class="modal-sub" id="dbcModalSubtitle">SAE J1939 Compliant Specification File</p>
                     </div>
                 </div>
-                <button id="closeDbcModalBtn" class="neu-btn modal-close-btn" title="Close Modal">✕</button>
+                <button id="closeDbcModalBtn" class="neu-btn modal-close-btn" aria-label="Close DBC preview" title="Close Modal">✕</button>
             </div>
             <div class="modal-body">
                 <div class="dbc-meta-strip neu-inset">
