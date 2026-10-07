@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import re
@@ -195,6 +196,9 @@ class Correlator:
 
     MIN_RX_FOR_LOCK = 40
     MIN_TX_FOR_LOCK = 40
+    RARE_KEY_MAX = 8              # transition seen at most this often in TX (periodic waveforms repeat)
+    MIN_EDGE_VOTES = 3
+    MAX_RX_WAIT_FOR_EDGE = 2000   # live: > 5 s lead-in at 200 Hz; then lock on payloads
 
     def __init__(self, db: Optional[SignalDb] = None, window_ms: float = 30.0,
                  rx_hold_s: float = 2.0, keep_events: int = 200_000):
@@ -243,6 +247,12 @@ class Correlator:
         m = RUN_RE.search(line)
         if m:
             with self.lock:
+                # A UART terminal log may contain several START commands or
+                # board resets.  Frames from different boot-time clocks must
+                # never share one correlation timeline.  Offline/live input
+                # therefore keeps the most recent explicitly marked run.
+                if self.counts["runs"] or self.counts["tx_logged"] or self.counts["rx_total"]:
+                    self.reset()
                 self.t0_ms = float(m.group(1))
                 self.counts["runs"] += 1
             return True
@@ -286,9 +296,68 @@ class Correlator:
             self.rx_queue.append(rx)
 
     # ------------------------------------------------------------------ engine
-    def _try_lock_offset(self) -> bool:
-        if len(self.rx_queue) < self.MIN_RX_FOR_LOCK or len(self.lock_tx) < self.MIN_TX_FOR_LOCK:
+    def _try_lock_offset(self, allow_short: bool = False) -> bool:
+        normal_ready = (len(self.rx_queue) >= self.MIN_RX_FOR_LOCK and
+                        len(self.lock_tx) >= self.MIN_TX_FOR_LOCK)
+        if not normal_ready:
+            if not allow_short or len(self.rx_queue) < 5 or len(self.lock_tx) < 5:
+                return False
+            # A short offline run is safe to lock only when the payload itself
+            # identifies each frame.  Constant data needs the normal 40-frame
+            # histogram and should not be given a potentially arbitrary offset.
+            tx_keys = {(tx.can_id, tx.data) for tx in self.lock_tx}
+            rx_keys = {(rx.can_id, rx.data) for rx in self.rx_queue}
+            if len(tx_keys & rx_keys) < 5:
+                return False
+
+        # A constant stretch (e.g. the 5 s lead-in at 0) gives a flat histogram
+        # plateau, so the peak is arbitrary.  Vote first with transitions
+        # (previous payload -> payload) that occur only a few times: they pin
+        # each frame to one position.
+        offset = self._lock_from_transitions()
+        if offset is None:
+            if not allow_short and len(self.rx_queue) < self.MAX_RX_WAIT_FOR_EDGE:
+                return False
+            offset = self._lock_from_payloads()
+        if offset is None:
             return False
+        self.offset_ms = offset
+        self.lock_tx.clear()
+        return True
+
+    @staticmethod
+    def _transition_keys(frames) -> List[Tuple[int, bytes, bytes]]:
+        prev: Dict[int, bytes] = {}
+        keys = []
+        for f in frames:
+            # First frame of an ID has no predecessor; skip it so a capture
+            # that starts late cannot anchor on the wrong TX frame
+            keys.append((f.can_id, prev[f.can_id], f.data) if f.can_id in prev else None)
+            prev[f.can_id] = f.data
+        return keys
+
+    def _lock_from_transitions(self) -> Optional[float]:
+        index: Dict[Tuple[int, bytes, bytes], List[float]] = {}
+        for tx, key in zip(self.lock_tx, self._transition_keys(self.lock_tx)):
+            if key is not None and key[1] != key[2]:
+                index.setdefault(key, []).append(tx.t_ms)
+        rx_frames = list(self.rx_queue)
+        deltas: List[float] = []          # in RX time order
+        for rx, key in zip(rx_frames, self._transition_keys(rx_frames)):
+            cands = index.get(key) if key is not None else None
+            if cands and len(cands) <= self.RARE_KEY_MAX:
+                deltas.extend(rx.t_ms - t for t in cands)
+        if len(deltas) < self.MIN_EDGE_VOTES:
+            return None
+        # Coarse peak (+-1 ms bins absorb crystal drift over the run), then the
+        # median of the earliest votes so matching starts from the run's head
+        hist = Counter(round(d) for d in deltas)
+        peak = max(hist, key=lambda k: sum(hist.get(k + j, 0) for j in (-1, 0, 1)))
+        near = [d for d in deltas if abs(d - peak) <= 5.0][:self.MIN_RX_FOR_LOCK]
+        near.sort()
+        return near[len(near) // 2]
+
+    def _lock_from_payloads(self) -> Optional[float]:
         index: Dict[Tuple[int, bytes], List[float]] = {}
         for tx in self.lock_tx:
             index.setdefault((tx.can_id, tx.data), []).append(tx.t_ms)
@@ -305,12 +374,10 @@ class Correlator:
                 hist[round(d)] += w
                 deltas.append((d, w))
         if not hist:
-            return False
+            return None
         peak = max(hist, key=lambda k: sum(hist.get(k + j, 0.0) for j in (-1, 0, 1)))
         near = sorted(d for d, _ in deltas if abs(d - peak) <= 2.0)
-        self.offset_ms = near[len(near) // 2] if near else float(peak)
-        self.lock_tx.clear()
-        return True
+        return near[len(near) // 2] if near else float(peak)
 
     def _in_gap(self, t_tx_ms: float) -> bool:
         return any(a - self.window_ms <= t_tx_ms <= b + self.window_ms for a, b, _ in self.gaps)
@@ -409,7 +476,7 @@ class Correlator:
 
     def pump(self, force: bool = False):
         with self.lock:
-            if self.offset_ms is None and not self._try_lock_offset():
+            if self.offset_ms is None and not self._try_lock_offset(allow_short=force):
                 if force:
                     self.counts["unlocked_rx"] += len(self.rx_queue)
                     self.rx_queue.clear()
@@ -518,7 +585,15 @@ ASC_RE = re.compile(
 
 
 def read_rx_file(path: Path) -> List[RxRecord]:
-    """Vector/TSMaster .asc (absolute or relative timestamps, seconds) or .jsonl from the bridge."""
+    """Read TSMaster/Vector ASC, bridge JSONL, or canonical replay CSV."""
+    path = Path(path)
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as probe:
+        first_nonempty = next((line.strip() for line in probe if line.strip()), "")
+    if first_nonempty.lower().startswith("seq,timestamp_us,can_id,extended,dlc,data_hex"):
+        from .replay_binary import read_csv
+        return [RxRecord(f.timestamp_us / 1000.0, f.can_id, f.data.ljust(8, b"\xff"), 1.0)
+                for f in read_csv(path)]
+
     out: List[RxRecord] = []
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -538,6 +613,147 @@ def read_rx_file(path: Path) -> List[RxRecord]:
     return out
 
 
+def _sha256(path: Optional[Path]) -> str:
+    if path is None:
+        return ""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def report_status(summary: dict) -> tuple[str, List[str]]:
+    """Return an evidence-level verdict and its warning/failure reasons."""
+    tx = summary["tx"]
+    rx = summary["rx"]
+    verdicts = summary["verdicts"]
+    spn_fail = sum(item.get("fail", 0) for item in summary.get("spn_checks", []))
+    failures: List[str] = []
+    warnings: List[str] = []
+    if not summary["clock_locked"]:
+        failures.append("Không khóa được quan hệ thời gian giữa hai clock")
+    if tx["busy"] or tx["error"]:
+        failures.append(f"CAN TX có {tx['busy']} BUSY và {tx['error']} ERROR")
+    if verdicts["lost"]:
+        failures.append(f"Có {verdicts['lost']} frame TX không thấy trên bus (LOST)")
+    if verdicts["mismatch"]:
+        failures.append(f"Có {verdicts['mismatch']} frame sai payload (MISMATCH)")
+    if verdicts["unexpected"]:
+        failures.append(f"Có {verdicts['unexpected']} frame RX ngoài dự kiến")
+    if spn_fail:
+        failures.append(f"Có {spn_fail} lần kiểm tra SPN thất bại")
+    if tx["log_gap_lines"] or verdicts["unlogged"]:
+        warnings.append(
+            f"UART evidence không đầy đủ: gap {tx['log_gap_lines']} dòng, "
+            f"TSMaster có {verdicts['unlogged']} frame UNLOGGED"
+        )
+    if rx["foreign"]:
+        warnings.append(f"Có {rx['foreign']} frame từ ECU/CAN-ID ngoài phạm vi test")
+    if failures:
+        return "FAIL", failures + warnings
+    if warnings:
+        return "PASS WITH WARNING", warnings
+    return "PASS", []
+
+
+def render_markdown_report(summary: dict, tx_path: Path, rx_path: Path,
+                           config_path: Optional[Path] = None) -> str:
+    """Create a Vietnamese human-readable evidence summary."""
+    status, reasons = report_status(summary)
+    tx = summary["tx"]
+    rx = summary["rx"]
+    verdicts = summary["verdicts"]
+    lines = [
+        "# Báo cáo đối chiếu STM32 UART ↔ TSMaster",
+        "",
+        f"## Kết luận: {status}",
+        "",
+    ]
+    if reasons:
+        lines.extend(f"- {reason}" for reason in reasons)
+        lines.append("")
+    lines.extend([
+        "## Tổng quan",
+        "",
+        "| Chỉ số | Kết quả | Ý nghĩa |",
+        "|---|---:|---|",
+        f"| Clock locked | `{str(summary['clock_locked']).lower()}` | Đã tìm được offset giữa clock STM32 và TSMaster |",
+        f"| Offset | {summary['offset_ms']} ms | Chênh lệch gốc clock, **không phải** CAN latency tuyệt đối |",
+        f"| TX logged / queued | {tx['logged']} / {tx['queued']} | Frame firmware ghi log / queue thành công |",
+        f"| TX busy / error | {tx['busy']} / {tx['error']} | Lỗi trước khi frame vào CAN mailbox |",
+        f"| UART log gaps | {tx['log_gap_lines']} | Dòng `$TX` thiếu trong UART evidence |",
+        f"| TSMaster RX | {rx['total']} | Tổng frame đọc từ ASC/JSONL |",
+        f"| MATCH | {verdicts['match']} | ID + 8 byte giống nhau trong cửa sổ thời gian |",
+        f"| LOST | {verdicts['lost']} | Có TX nhưng không tìm thấy RX |",
+        f"| MISMATCH | {verdicts['mismatch']} | Đúng frame time/ID nhưng khác payload |",
+        f"| UNEXPECTED | {verdicts['unexpected']} | Có RX nhưng không có TX tương ứng |",
+        f"| UNLOGGED | {verdicts['unlogged']} | TSMaster nhận frame trong đoạn UART bị gap |",
+        f"| Match rate | {summary['match_rate_pct']}% | `MATCH / (MATCH + LOST + MISMATCH)` |",
+        "",
+        "## Timing",
+        "",
+        "`latency_jitter_ms` là residual sau khi loại offset và bám clock drift; "
+        "không được diễn giải là độ trễ vật lý tuyệt đối giữa STM32 và TSMaster.",
+        "",
+    ])
+    jitter = summary.get("latency_jitter_ms", {})
+    if jitter.get("n"):
+        lines.extend([
+            f"- Samples: {jitter['n']}",
+            f"- Residual mean/std: {jitter['mean']} / {jitter['std']} ms",
+            f"- Residual min/max: {jitter['min']} / {jitter['max']} ms",
+            f"- Estimated clock drift: {summary.get('clock_drift_ppm')} ppm",
+            "",
+        ])
+    for item in summary.get("per_id", []):
+        txp, rxp = item["tx_period_ms"], item["rx_period_ms"]
+        lines.extend([
+            f"### {item['can_id']} — PGN {item['pgn']}",
+            "",
+            f"- TX log period: mean {txp.get('mean', 'n/a')} ms, min {txp.get('min', 'n/a')}, max {txp.get('max', 'n/a')}.",
+            f"- RX bus period: mean {rxp.get('mean', 'n/a')} ms, min {rxp.get('min', 'n/a')}, max {rxp.get('max', 'n/a')}, std {rxp.get('std', 'n/a')}.",
+            "- Khi UART có gap, RX period là bằng chứng đáng tin cậy hơn cho timing trên bus.",
+            "",
+        ])
+    lines.extend(["## Kiểm tra SPN", ""])
+    if not summary.get("spn_checks"):
+        lines.extend(["Không có config SPN nên chỉ kiểm tra transport/timing.", ""])
+    else:
+        lines.extend([
+            "| SPN | Tên | Checked | Value OK | Fail | Giá trị cuối |",
+            "|---:|---|---:|---:|---:|---|",
+        ])
+        for item in summary["spn_checks"]:
+            last = item.get("last", {})
+            value = f"{last.get('value', '')} {last.get('unit', '')}".strip()
+            lines.append(
+                f"| {item['spn']} | {item.get('name', '')} | {item['checked']} | "
+                f"{item['value_ok']} | {item['fail']} | {value} |"
+            )
+        lines.append("")
+    lines.extend([
+        "## Nguồn bằng chứng",
+        "",
+        "| File | SHA-256 |",
+        "|---|---|",
+        f"| `{tx_path}` | `{_sha256(tx_path)}` |",
+        f"| `{rx_path}` | `{_sha256(rx_path)}` |",
+    ])
+    if config_path:
+        lines.append(f"| `{config_path}` | `{_sha256(config_path)}` |")
+    lines.extend([
+        "",
+        "## Quy tắc kết luận",
+        "",
+        "- **FAIL:** không lock clock; có BUSY/ERROR, LOST, MISMATCH, UNEXPECTED hoặc SPN fail.",
+        "- **PASS WITH WARNING:** dữ liệu đã match nhưng UART evidence có gap/UNLOGGED hoặc có foreign frames.",
+        "- **PASS:** clock lock, dữ liệu/SPN đúng và evidence không có gap.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Correlate STM32 $TX log with TSMaster RX log")
     ap.add_argument("--tx", required=True, type=Path, help="UART log containing $TX/$RUN lines")
@@ -546,6 +762,8 @@ def main():
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--window-ms", type=float, default=30.0)
     ap.add_argument("--csv", type=Path, help="Write per-frame verdicts")
+    ap.add_argument("--summary-json", type=Path, help="Write machine-readable run summary")
+    ap.add_argument("--report-md", type=Path, help="Write human-readable Vietnamese report")
     args = ap.parse_args()
 
     corr = Correlator(SignalDb(args.db), window_ms=args.window_ms)
@@ -560,10 +778,21 @@ def main():
         corr.add_rx(rx)
     corr.finish()
 
-    print(json.dumps(corr.summary(), indent=2, ensure_ascii=False))
+    summary = corr.summary()
+    print(json.dumps(summary, indent=2, ensure_ascii=False))
     if args.csv:
         corr.write_csv(args.csv)
         print(f"Per-frame report: {args.csv}")
+    if args.summary_json:
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"Summary JSON: {args.summary_json}")
+    if args.report_md:
+        args.report_md.parent.mkdir(parents=True, exist_ok=True)
+        args.report_md.write_text(
+            render_markdown_report(summary, args.tx, args.rx, args.config), encoding="utf-8"
+        )
+        print(f"Human report: {args.report_md}")
 
 
 if __name__ == "__main__":
