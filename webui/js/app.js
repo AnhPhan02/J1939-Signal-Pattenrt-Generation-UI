@@ -28,10 +28,12 @@ document.addEventListener('DOMContentLoaded', () => {
         mode: 'SAE'
     },
     inputLog: [], // Stores snapshots of input configuration
-    isRecordingTxtLog: false, // Flag for real-time .txt recording
+    isRecordingTxtLog: false, // Flag for browser-simulated .txt recording
     recordedTxtLines: [], // Continuous .txt log buffer
     recordingStartTime: 0
 };
+    let expandedSpn = 190;
+    let currentSection = 'configure';
 
     // DOM Elements
     const comPortSelect = document.getElementById('comPortSelect');
@@ -83,12 +85,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // INITIALIZATION
     // =========================================================================
     async function init() {
+        organizeLayout();
         await loadPorts();
         await loadSpns();
         initSseStream();
         initPcanAnalyzer();
         startWaveformAnimation();
         setupEventListeners();
+        setSection('configure');
         loadSavedInputLogs();
 
         // Auto-detect and connect to STM32 port
@@ -117,12 +121,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/ports');
             const data = await res.json();
             comPortSelect.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select STM32 serial port';
+            placeholder.selected = true;
+            comPortSelect.appendChild(placeholder);
 
             if (data.ports.length === 0) {
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'No COM ports detected (Plug STM32 USB)';
-                comPortSelect.appendChild(opt);
+                placeholder.textContent = 'No serial ports detected';
                 return;
             }
 
@@ -169,6 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             state.selectedSpns.add(190);
             updateSelectionCount();
             renderActiveView();
+            renderSignalPicker();
             updateBusLoadMeter();
             updateVisualizerStats(190);
         } catch (err) {
@@ -209,6 +216,118 @@ document.addEventListener('DOMContentLoaded', () => {
             const pcanContainer = document.getElementById('spnPcanContainer');
             if (pcanContainer) pcanContainer.classList.remove('hidden');
         }
+    }
+
+    function organizeLayout() {
+        const move = (selector, targetId) => {
+            const element = document.querySelector(selector);
+            const target = document.getElementById(targetId);
+            if (element && target) target.appendChild(element);
+        };
+        move('.presets-box', 'presetToolContent');
+        move('.batch-pattern-bar', 'presetToolContent');
+        move('.batch-timeframe-bar', 'presetToolContent');
+        move('#viewMatrixBtn', 'bulkToolContent');
+        move('#spnMatrixContainer', 'bulkToolContent');
+        move('.dbc-export-strip', 'dbcToolContent');
+        move('#viewPcanBtn', 'previewToolContent');
+        move('#spnPcanContainer', 'previewToolContent');
+        move('#logToolsSection', 'logToolContent');
+        move('.serial-monitor-card', 'serialToolContent');
+        move('#busLoadInline', 'runSection');
+        const picker = document.getElementById('signalPicker');
+        const results = document.getElementById('signalPickerResults');
+        const signalSection = document.getElementById('signalSection');
+        signalSection.insertBefore(document.querySelector('.selection-counter'), picker);
+        picker.insertBefore(document.querySelector('.search-filter-box'), results);
+        picker.insertBefore(document.getElementById('categoryTabs'), results);
+    }
+
+    function setSection(section) {
+        currentSection = section;
+        document.body.dataset.section = section;
+        document.getElementById('toolsSection').classList.toggle('hidden', section !== 'tools');
+        document.querySelectorAll('.workflow-link').forEach(button => {
+            const active = button.dataset.section === section;
+            button.classList.toggle('active', active);
+            if (active) button.setAttribute('aria-current', 'page');
+            else button.removeAttribute('aria-current');
+        });
+        if (section === 'configure') document.getElementById('viewCardsBtn').click();
+        if (section === 'validate') document.getElementById('viewValidationBtn').click();
+        if (section === 'tools') {
+            const mode = state.viewMode === 'matrix' || state.viewMode === 'pcan' ? state.viewMode : 'matrix';
+            document.getElementById(mode === 'matrix' ? 'viewMatrixBtn' : 'viewPcanBtn').click();
+        }
+        if (section === 'run') renderRunSummary();
+    }
+
+    function showFeedback(message, tone = 'error') {
+        const feedback = document.getElementById('appFeedback');
+        feedback.textContent = message;
+        feedback.className = `app-feedback ${tone}`;
+        feedback.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+        feedback.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+    }
+
+    function renderRunSummary() {
+        const modes = ['Smooth', 'SAE', 'Stress'];
+        const count = state.selectedSpns.size;
+        document.getElementById('runSummary').textContent =
+            `${count} signal${count === 1 ? '' : 's'} selected · ${modes[state.timingMode]} · ` +
+            `${state.testDurationSec ? `${state.testDurationSec} s` : 'Continuous'} · ${state.canBaudKbps} kbps`;
+    }
+
+    function validateRunConfiguration() {
+        if (state.selectedSpns.size === 0) {
+            showFeedback('Add at least one signal before starting.');
+            setSection('configure');
+            document.getElementById('signalPicker').open = true;
+            return false;
+        }
+        for (const spn of state.selectedSpns) {
+            const cfg = state.spnConfigs.get(spn);
+            if (!cfg || ![cfg.min, cfg.max, cfg.param1, cfg.timeframe_ms, cfg.t_start, cfg.t_dur].every(Number.isFinite)
+                    || cfg.min > cfg.max || cfg.timeframe_ms < 5 || cfg.timeframe_ms > 5000
+                    || cfg.t_start < 0 || cfg.t_dur < 0 || ([1, 2, 3, 5, 7].includes(cfg.type) && cfg.param1 <= 0)) {
+                showFeedback(`Check SPN ${spn}: min must not exceed max, and timing values must be valid.`);
+                expandedSpn = spn;
+                setSection('configure');
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function renderSignalPicker() {
+        const results = document.getElementById('signalPickerResults');
+        const available = getFilteredSpns().filter(signal => !state.selectedSpns.has(signal.spn));
+        document.getElementById('availableCount').textContent =
+            `${state.spns.length - state.selectedSpns.size} available`;
+        results.replaceChildren();
+        if (!available.length) {
+            const empty = document.createElement('p');
+            empty.className = 'picker-empty';
+            empty.textContent = 'No available signals match this filter.';
+            results.appendChild(empty);
+            return;
+        }
+        available.forEach(signal => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'picker-signal';
+            button.textContent = `${signal.name} · SPN ${signal.spn} · PGN ${signal.pgn}`;
+            button.addEventListener('click', () => {
+                state.selectedSpns.add(signal.spn);
+                expandedSpn = signal.spn;
+                updateSelectionCount();
+                renderSpnCards();
+                updateBusLoadMeter();
+                focusVisualizer(signal.spn);
+                showFeedback(`${signal.name} added.`, 'success');
+            });
+            results.appendChild(button);
+        });
     }
 
     // =========================================================================
@@ -266,10 +385,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderSpnCards() {
-        const filtered = getFilteredSpns();
+        const filtered = state.spns.filter(s => state.selectedSpns.has(s.spn));
 
         if (filtered.length === 0) {
-            spnCardsContainer.innerHTML = `<div class="empty-loading-state"><p>No matching SPNs found for "${state.searchQuery}".</p></div>`;
+            spnCardsContainer.innerHTML = '<div class="empty-loading-state"><p>No signals selected. Use Add signals above to begin.</p></div>';
             return;
         }
 
@@ -278,28 +397,33 @@ document.addEventListener('DOMContentLoaded', () => {
             const isSelected = state.selectedSpns.has(s.spn);
             const cfg = state.spnConfigs.get(s.spn);
 
-            const card = document.createElement('div');
-            card.className = `spn-card ${isSelected ? 'selected' : ''}`;
+            const card = document.createElement('details');
+            card.className = 'spn-card selected';
             card.dataset.spn = s.spn;
+            card.open = s.spn === expandedSpn;
 
             card.innerHTML = `
+                <summary class="spn-summary">
+                    <span class="spn-summary-name">${escapeHtml(s.name)}</span>
+                    <span class="spn-compact-meta">SPN ${s.spn} · PGN ${s.pgn} · ${escapeHtml(getPatternName(cfg.type))}</span>
+                </summary>
+                <div class="spn-edit-body">
                 <div class="spn-top-row">
                     <div class="spn-identity">
                         <span class="spn-tag">SPN ${s.spn}</span>
                         <span class="pgn-tag">PGN ${s.pgn}</span>
                     </div>
                     <div class="spn-toggle-wrap">
-                        <input type="checkbox" class="spn-checkbox" ${isSelected ? 'checked' : ''} data-spn="${s.spn}">
+                        <label><input type="checkbox" class="spn-checkbox" ${isSelected ? 'checked' : ''} data-spn="${s.spn}"> Include signal</label>
                     </div>
                 </div>
                 <div class="spn-title-row">
-                    <h4 class="spn-name">${s.name}</h4>
-                    <span class="spn-unit-info">Range: [${s.min_physical} to ${s.max_physical} ${s.unit}] &bull; Res: ${s.resolution}</span>
+                    <span class="spn-unit-info">Defined range: ${s.min_physical} to ${s.max_physical} ${escapeHtml(s.unit)} · Resolution: ${s.resolution}</span>
                 </div>
                 <div class="spn-pattern-config">
                     <div class="pattern-select-row">
-                        <label>Waveform:</label>
-                        <select class="neu-select pattern-dropdown" data-spn="${s.spn}">
+                        <label for="pattern-${s.spn}">Waveform</label>
+                        <select id="pattern-${s.spn}" class="neu-select pattern-dropdown" data-spn="${s.spn}">
                             <option value="2" ${cfg.type === 2 ? 'selected' : ''}>∿ Sine Wave</option>
                             <option value="1" ${cfg.type === 1 ? 'selected' : ''}>📈 Ramp (Sawtooth)</option>
                             <option value="3" ${cfg.type === 3 ? 'selected' : ''}>🔺 Triangle Wave</option>
@@ -311,22 +435,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                     <div class="pattern-params-grid">
                         <div class="param-cell">
-                            <span>Min (${s.unit || '-'})</span>
-                            <input type="number" step="any" class="neu-input cfg-min" value="${cfg.min}" data-spn="${s.spn}">
+                            <label for="min-${s.spn}">Min (${escapeHtml(s.unit || '-')})</label>
+                            <input id="min-${s.spn}" type="number" step="any" class="neu-input cfg-min" value="${cfg.min}" data-spn="${s.spn}">
                         </div>
                         <div class="param-cell">
-                            <span>Max (${s.unit || '-'})</span>
-                            <input type="number" step="any" class="neu-input cfg-max" value="${cfg.max}" data-spn="${s.spn}">
+                            <label for="max-${s.spn}">Max (${escapeHtml(s.unit || '-')})</label>
+                            <input id="max-${s.spn}" type="number" step="any" class="neu-input cfg-max" value="${cfg.max}" data-spn="${s.spn}">
                         </div>
                         <div class="param-cell">
-                            <span class="param1-label">${getParam1Label(cfg.type)}</span>
-                            <input type="number" step="any" class="neu-input cfg-param1" value="${cfg.param1}" data-spn="${s.spn}">
+                            <label for="param-${s.spn}" class="param1-label">${getParam1Label(cfg.type)}</label>
+                            <input id="param-${s.spn}" type="number" step="any" class="neu-input cfg-param1" value="${cfg.param1}" data-spn="${s.spn}">
                         </div>
                     </div>
                     <div class="spn-timeframe-grid">
                         <div class="timeframe-input-cell">
-                            <span>Timeframe Cycle</span>
-                            <select class="neu-select cfg-timeframe" data-spn="${s.spn}">
+                            <label for="cycle-${s.spn}">Timeframe cycle</label>
+                            <select id="cycle-${s.spn}" class="neu-select cfg-timeframe" data-spn="${s.spn}">
                                 <option value="10" ${cfg.timeframe_ms === 10 ? 'selected' : ''}>10ms (100Hz)</option>
                                 <option value="20" ${cfg.timeframe_ms === 20 ? 'selected' : ''}>20ms (50Hz - Smooth)</option>
                                 <option value="50" ${cfg.timeframe_ms === 50 ? 'selected' : ''}>50ms (20Hz)</option>
@@ -335,17 +459,30 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <option value="1000" ${cfg.timeframe_ms === 1000 ? 'selected' : ''}>1000ms (1Hz - SAE)</option>
                             </select>
                         </div>
-                        <div class="timeframe-input-cell">
-                            <span>Start (s)</span>
-                            ${secondsStepperHtml('neu-input cfg-t-start', cfg.t_start, s.spn, 'Execution start window in seconds')}
-                        </div>
-                        <div class="timeframe-input-cell">
-                            <span>Dur (s)</span>
-                            ${secondsStepperHtml('neu-input cfg-t-dur', cfg.t_dur, s.spn, 'Execution duration in seconds (0 = Continuous)')}
-                        </div>
                     </div>
+                    <details class="spn-advanced">
+                        <summary>Advanced timing</summary>
+                        <p>Start and duration windows are stored in configuration, but the current firmware does not apply them.</p>
+                        <div class="advanced-timing-fields">
+                            <label class="timeframe-input-cell" for="start-${s.spn}">Start (s)
+                                <input id="start-${s.spn}" type="number" min="0" step="0.5" class="neu-input cfg-t-start" value="${cfg.t_start}" data-spn="${s.spn}">
+                            </label>
+                            <label class="timeframe-input-cell" for="duration-${s.spn}">Duration (s)
+                                <input id="duration-${s.spn}" type="number" min="0" step="0.5" class="neu-input cfg-t-dur" value="${cfg.t_dur}" data-spn="${s.spn}">
+                            </label>
+                        </div>
+                    </details>
+                </div>
                 </div>
             `;
+
+            card.addEventListener('toggle', () => {
+                if (!card.isConnected || !card.open) return;
+                expandedSpn = s.spn;
+                spnCardsContainer.querySelectorAll('.spn-card').forEach(other => {
+                    if (other !== card) other.open = false;
+                });
+            });
 
             // Card click focuses visualizer
             card.addEventListener('click', (e) => {
@@ -367,6 +504,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateSelectionCount();
                 updateBusLoadMeter();
                 focusVisualizer(s.spn);
+                if (!e.target.checked) {
+                    expandedSpn = state.selectedSpns.values().next().value ?? null;
+                    renderSpnCards();
+                }
             });
 
             function autoSelectSpn() {
@@ -386,6 +527,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const currentCfg = state.spnConfigs.get(s.spn);
                 currentCfg.type = newType;
                 card.querySelector('.param1-label').textContent = getParam1Label(newType);
+                card.querySelector('.spn-compact-meta').textContent = `SPN ${s.spn} · PGN ${s.pgn} · ${getPatternName(newType)}`;
                 autoSelectSpn();
                 focusVisualizer(s.spn);
             });
@@ -423,14 +565,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateBusLoadMeter();
                 if (state.activeVisualizerSpn === s.spn) updateVisualizerStats(s.spn);
             });
-            bindSecondsInput(tStartIn, (val) => {
-                state.spnConfigs.get(s.spn).t_start = val;
-                autoSelectSpn();
-            });
-            bindSecondsInput(tDurIn, (val) => {
-                state.spnConfigs.get(s.spn).t_dur = val;
-                autoSelectSpn();
-            });
+            tStartIn.addEventListener('input', e => { state.spnConfigs.get(s.spn).t_start = Number(e.target.value); });
+            tDurIn.addEventListener('input', e => { state.spnConfigs.get(s.spn).t_dur = Number(e.target.value); });
 
             spnCardsContainer.appendChild(card);
         });
@@ -459,7 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const rateHz = cfg.timeframe_ms > 0 ? (1000 / cfg.timeframe_ms).toFixed(0) + ' Hz' : '50 Hz';
 
             tr.innerHTML = `
-                <td><input type="checkbox" class="matrix-chk" data-spn="${s.spn}" ${isSelected ? 'checked' : ''}></td>
+                <td><input type="checkbox" class="matrix-chk" data-spn="${s.spn}" aria-label="Select SPN ${s.spn} ${s.name}" ${isSelected ? 'checked' : ''}></td>
                 <td><span class="matrix-spn-badge">${s.spn}</span></td>
                 <td><span class="matrix-pgn-badge">${s.pgn}</span></td>
                 <td>
@@ -467,7 +603,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="matrix-sig-unit">${s.unit || '-'}</span>
                 </td>
                 <td>
-                    <select class="matrix-select matrix-type" data-spn="${s.spn}">
+                    <select class="matrix-select matrix-type" data-spn="${s.spn}" aria-label="SPN ${s.spn} pattern">
                         <option value="2" ${cfg.type === 2 ? 'selected' : ''}>∿ Sine Wave</option>
                         <option value="1" ${cfg.type === 1 ? 'selected' : ''}>📈 Ramp (Sawtooth)</option>
                         <option value="3" ${cfg.type === 3 ? 'selected' : ''}>🔺 Triangle</option>
@@ -477,11 +613,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         <option value="0" ${cfg.type === 0 ? 'selected' : ''}>━ Constant Flat</option>
                     </select>
                 </td>
-                <td><input type="number" step="any" class="matrix-input matrix-min" value="${cfg.min}" data-spn="${s.spn}"></td>
-                <td><input type="number" step="any" class="matrix-input matrix-max" value="${cfg.max}" data-spn="${s.spn}"></td>
-                <td><input type="number" step="any" class="matrix-input matrix-param1" value="${cfg.param1}" data-spn="${s.spn}"></td>
+                <td><input type="number" step="any" class="matrix-input matrix-min" value="${cfg.min}" data-spn="${s.spn}" aria-label="SPN ${s.spn} minimum"></td>
+                <td><input type="number" step="any" class="matrix-input matrix-max" value="${cfg.max}" data-spn="${s.spn}" aria-label="SPN ${s.spn} maximum"></td>
+                <td><input type="number" step="any" class="matrix-input matrix-param1" value="${cfg.param1}" data-spn="${s.spn}" aria-label="SPN ${s.spn} pattern parameter"></td>
                 <td>
-                    <select class="matrix-select matrix-timeframe" data-spn="${s.spn}">
+                    <select class="matrix-select matrix-timeframe" data-spn="${s.spn}" aria-label="SPN ${s.spn} interval">
                         <option value="10" ${cfg.timeframe_ms === 10 ? 'selected' : ''}>10ms (100Hz)</option>
                         <option value="20" ${cfg.timeframe_ms === 20 ? 'selected' : ''}>20ms (50Hz - Smooth)</option>
                         <option value="50" ${cfg.timeframe_ms === 50 ? 'selected' : ''}>50ms (20Hz)</option>
@@ -759,7 +895,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const uniquePgns = new Set(state.spns.map(s => s.pgn));
         const sortedPgns = Array.from(uniquePgns).sort((a, b) => a - b);
 
-        filterSelect.innerHTML = '<option value="all">All Transmitting PGNs (CAN1 Trace)</option>';
+        filterSelect.innerHTML = '<option value="all">All simulated PGNs</option>';
         sortedPgns.forEach(pgn => {
             const meta = PGN_METADATA[pgn] || { acronym: `PGN_${pgn}`, name: `J1939 PGN ${pgn}` };
             const opt = document.createElement('option');
@@ -886,7 +1022,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (recStatusPill && recStatusText) {
                             recStatusPill.classList.remove('hidden');
                             const recElapsedSec = (now - state.recordingStartTime) / 1000.0;
-                            recStatusText.textContent = `RECORDING LIVE: ${state.recordedTxtLines.length} lines (${recElapsedSec.toFixed(1)}s)`;
+                            recStatusText.textContent = `SIMULATED PREVIEW: ${state.recordedTxtLines.length} lines (${recElapsedSec.toFixed(1)}s)`;
                         }
                     }
 
@@ -1148,8 +1284,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function getPatternName(type) {
+        return ['Constant', 'Ramp', 'Sine', 'Triangle', 'Step', 'Square', 'Random', 'State sequence'][type] || 'Waveform';
+    }
+
     function updateSelectionCount() {
         selectedCountEl.textContent = state.selectedSpns.size;
+        renderRunSummary();
+        renderSignalPicker();
     }
 
     function focusVisualizer(spn) {
@@ -1492,7 +1634,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function downloadInputLogs() {
         if (state.inputLog.length === 0) {
-            alert('No snapshot logs recorded yet. Click "Log Input State" to record a snapshot.');
+            showFeedback('No configuration snapshots yet. Save one before comparing.');
             return;
         }
 
@@ -1568,7 +1710,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function compareLoggedInputs() {
         const checkedBoxes = document.querySelectorAll('.snap-check:checked');
         if (checkedBoxes.length !== 2) {
-            alert('Please check EXACTLY 2 snapshots in the list to compare side-by-side.');
+            showFeedback('Select exactly two snapshots to compare.');
             return;
         }
 
@@ -1677,25 +1819,25 @@ document.addEventListener('DOMContentLoaded', () => {
             state.recordedTxtLines = [];
             state.recordingStartTime = Date.now();
             if (recIcon) recIcon.textContent = '⏹️';
-            if (recText) recText.textContent = 'Stop Recording (.txt)';
+            if (recText) recText.textContent = 'Stop Preview Recording';
             if (recBtn) recBtn.classList.add('recording-active');
             if (recStatusPill) recStatusPill.classList.remove('hidden');
         } else {
             if (recIcon) recIcon.textContent = '🔴';
-            if (recText) recText.textContent = 'Start Recording (.txt)';
+            if (recText) recText.textContent = 'Record Preview (.txt)';
             if (recBtn) recBtn.classList.remove('recording-active');
             
             if (state.recordedTxtLines.length > 0) {
                 downloadRecordedTxtLog();
             } else {
-                alert('Recording stopped. No CAN frames were captured during recording window.');
+                showFeedback('No simulated frames were recorded.');
             }
         }
     }
 
     function downloadRecordedTxtLog() {
         if (state.recordedTxtLines.length === 0) {
-            alert('Log buffer is empty. Start recording first to capture real-time CAN bus frames into .txt!');
+            showFeedback('The simulated preview log is empty. Record the preview first.');
             return;
         }
 
@@ -1704,7 +1846,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const modeText = modeNames[state.timingMode] || 'Standard';
 
         let txtContent = `================================================================================\n`;
-        txtContent += `J1939 INTELLIGENT WAVEFORM & SIGNAL VERIFICATION HUB - CAN BUS TRACE LOG (.TXT)\n`;
+        txtContent += `J1939 BROWSER-SIMULATED FRAME PREVIEW LOG (.TXT) - NOT OBSERVED CAN TRAFFIC\n`;
         txtContent += `Creators: Vishal Meyyappan R (3rd Year ECE - ACT) & Srikar (4th year ECE)\n`;
         txtContent += `Institution: Chennai Institute of Technology (CIT Chennai) & STUST Taiwan\n`;
         txtContent += `--------------------------------------------------------------------------------\n`;
@@ -1722,7 +1864,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const filename = `j1939_can_bus_trace_log_${Date.now()}.txt`;
+        const filename = `j1939_simulated_preview_${Date.now()}.txt`;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
@@ -1734,6 +1876,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // EVENT LISTENERS & USER CONTROLS
     // =========================================================================
     function setupEventListeners() {
+        document.querySelectorAll('.workflow-link').forEach(button => {
+            button.addEventListener('click', () => setSection(button.dataset.section));
+        });
+        document.getElementById('bulkToolGroup').addEventListener('toggle', event => {
+            if (event.target.open) document.getElementById('viewMatrixBtn').click();
+        });
+        document.getElementById('previewToolGroup').addEventListener('toggle', event => {
+            if (event.target.open) document.getElementById('viewPcanBtn').click();
+        });
         // TOP LOG TOOLBAR BUTTONS
         const topToggleRecBtn = document.getElementById('topToggleRecBtn');
         const topDownloadTxtLogBtn = document.getElementById('topDownloadTxtLogBtn');
@@ -1766,7 +1917,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!state.isConnected) {
                 if (!port) {
-                    alert('Please select a valid COM port.');
+                    showFeedback('Select a serial port before connecting.');
                     return;
                 }
                 try {
@@ -1783,12 +1934,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         connectBtn.innerHTML = '<span class="btn-icon">🔌</span><span class="btn-text">Disconnect</span>';
                         connectBtn.classList.replace('primary-btn', 'stop-btn');
                         connStatusPill.className = 'status-pill online';
-                        connStatusPill.innerHTML = '<span class="status-dot"></span><span class="status-label">ONLINE: ' + port + '</span>';
+                        connStatusPill.querySelector('.status-label').textContent = `ONLINE: ${port}`;
+                        showFeedback(`Connected to ${port}.`, 'success');
                     } else {
                         throw new Error(data.detail || 'Connection failed');
                     }
                 } catch (err) {
-                    alert('Connection Error: ' + err.message);
+                    showFeedback('Connection error: ' + err.message);
                 } finally {
                     connectBtn.disabled = false;
                 }
@@ -1799,17 +1951,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 connectBtn.innerHTML = '<span class="btn-icon">⚡</span><span class="btn-text">Connect Device</span>';
                 connectBtn.classList.replace('stop-btn', 'primary-btn');
                 connStatusPill.className = 'status-pill offline';
-                connStatusPill.innerHTML = '<span class="status-dot"></span><span class="status-label">DISCONNECTED</span>';
+                connStatusPill.querySelector('.status-label').textContent = 'DISCONNECTED';
+                showFeedback('Device disconnected.', 'info');
             }
         });
 
         // CAN Baud Rate Toggle (250 vs 500 kbps)
         canBaudToggle.querySelectorAll('.seg-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
-                canBaudToggle.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+                canBaudToggle.querySelectorAll('.seg-btn').forEach(b => {
+                    b.classList.remove('active');
+                    b.setAttribute('aria-pressed', 'false');
+                });
                 btn.classList.add('active');
+                btn.setAttribute('aria-pressed', 'true');
                 state.canBaudKbps = parseInt(btn.dataset.baud);
                 statBaudEl.textContent = state.canBaudKbps;
+                renderRunSummary();
 
                 if (state.isConnected) {
                     await fetch('/api/baud', {
@@ -1830,6 +1988,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.timingMode = 0;
                 state.stats.mode = 'SMOOTH';
                 statModeEl.textContent = 'SMOOTH';
+                document.querySelectorAll('.mode-btn').forEach(b => b.setAttribute('aria-pressed', String(b === modeSmoothBtn)));
+                renderRunSummary();
             });
         }
         modeSaeBtn.addEventListener('click', () => {
@@ -1839,6 +1999,8 @@ document.addEventListener('DOMContentLoaded', () => {
             state.timingMode = 1;
             state.stats.mode = 'SAE';
             statModeEl.textContent = 'SAE';
+            document.querySelectorAll('.mode-btn').forEach(b => b.setAttribute('aria-pressed', String(b === modeSaeBtn)));
+            renderRunSummary();
         });
         modeStressBtn.addEventListener('click', () => {
             modeStressBtn.classList.add('active');
@@ -1847,39 +2009,57 @@ document.addEventListener('DOMContentLoaded', () => {
             state.timingMode = 2;
             state.stats.mode = 'STRESS';
             statModeEl.textContent = 'STRESS';
+            document.querySelectorAll('.mode-btn').forEach(b => b.setAttribute('aria-pressed', String(b === modeStressBtn)));
+            renderRunSummary();
         });
 
         // Duration Presets
         document.querySelectorAll('.duration-presets .neu-chip').forEach(chip => {
+            chip.setAttribute('aria-pressed', String(chip.classList.contains('active')));
             chip.addEventListener('click', () => {
-                document.querySelectorAll('.duration-presets .neu-chip').forEach(c => c.classList.remove('active'));
+                document.querySelectorAll('.duration-presets .neu-chip').forEach(c => {
+                    c.classList.remove('active');
+                    c.setAttribute('aria-pressed', 'false');
+                });
                 chip.classList.add('active');
+                chip.setAttribute('aria-pressed', 'true');
                 state.testDurationSec = parseInt(chip.dataset.dur);
                 customDurationInput.value = '';
+                renderRunSummary();
             });
         });
         customDurationInput.addEventListener('input', () => {
             const val = parseInt(customDurationInput.value);
-            if (!isNaN(val) && val > 0) {
-                document.querySelectorAll('.duration-presets .neu-chip').forEach(c => c.classList.remove('active'));
-                state.testDurationSec = val;
-            }
+            document.querySelectorAll('.duration-presets .neu-chip').forEach(c => {
+                const active = (!Number.isFinite(val) || val <= 0) && c.dataset.dur === '0';
+                c.classList.toggle('active', active);
+                c.setAttribute('aria-pressed', String(active));
+            });
+            state.testDurationSec = Number.isFinite(val) && val > 0 ? val : 0;
+            renderRunSummary();
         });
 
         // Category Tabs
         categoryTabs.querySelectorAll('.cat-tab').forEach(tab => {
+            tab.setAttribute('aria-pressed', String(tab.classList.contains('active')));
             tab.addEventListener('click', () => {
-                categoryTabs.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+                categoryTabs.querySelectorAll('.cat-tab').forEach(t => {
+                    t.classList.remove('active');
+                    t.setAttribute('aria-pressed', 'false');
+                });
                 tab.classList.add('active');
+                tab.setAttribute('aria-pressed', 'true');
                 state.currentCategory = tab.dataset.cat;
-                renderActiveView();
+                renderSignalPicker();
+                if (state.viewMode === 'matrix') renderMatrixTable();
             });
         });
 
         // Search Input
         spnSearchInput.addEventListener('input', () => {
             state.searchQuery = spnSearchInput.value;
-            renderActiveView();
+            renderSignalPicker();
+            if (state.viewMode === 'matrix') renderMatrixTable();
         });
 
         function applyBatchWaveformToAll(type, param) {
@@ -1922,7 +2102,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (batchApplySelectedBtn) {
             batchApplySelectedBtn.addEventListener('click', () => {
                 if (state.selectedSpns.size === 0) {
-                    alert('Please select at least one SPN first.');
+                    showFeedback('Select at least one signal first.');
                     return;
                 }
                 const type = parseInt(document.getElementById('batchWaveformSelect').value);
@@ -1947,9 +2127,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // PRO BATCH TIMEFRAME CONTROLS
         let selectedBatchTf = 20;
         document.querySelectorAll('.tf-quick-btn').forEach(btn => {
+            btn.setAttribute('aria-pressed', String(btn.classList.contains('active')));
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.tf-quick-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tf-quick-btn').forEach(b => {
+                    b.classList.remove('active');
+                    b.setAttribute('aria-pressed', 'false');
+                });
                 btn.classList.add('active');
+                btn.setAttribute('aria-pressed', 'true');
                 selectedBatchTf = parseInt(btn.dataset.tf);
                 const customIn = document.getElementById('batchCustomTfInput');
                 if (customIn) customIn.value = '';
@@ -1961,7 +2146,10 @@ document.addEventListener('DOMContentLoaded', () => {
             batchCustomTfInput.addEventListener('input', () => {
                 const val = parseInt(batchCustomTfInput.value);
                 if (!isNaN(val) && val >= 5) {
-                    document.querySelectorAll('.tf-quick-btn').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tf-quick-btn').forEach(b => {
+                        b.classList.remove('active');
+                        b.setAttribute('aria-pressed', 'false');
+                    });
                     selectedBatchTf = val;
                 }
             });
@@ -1991,22 +2179,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function switchView(mode) {
             state.viewMode = mode;
-            [viewCardsBtn, viewMatrixBtn, viewPcanBtn, viewValidationBtn].forEach(b => b && b.classList.remove('active'));
+            [viewCardsBtn, viewMatrixBtn, viewPcanBtn, viewValidationBtn].forEach(b => {
+                if (!b) return;
+                b.classList.remove('active');
+                b.setAttribute('aria-pressed', 'false');
+            });
             [cardsContainer, matrixContainer, pcanContainer, validationContainer].forEach(c => c && c.classList.add('hidden'));
 
             if (mode === 'cards') {
                 if (viewCardsBtn) viewCardsBtn.classList.add('active');
+                if (viewCardsBtn) viewCardsBtn.setAttribute('aria-pressed', 'true');
                 if (cardsContainer) cardsContainer.classList.remove('hidden');
                 renderSpnCards();
             } else if (mode === 'matrix') {
                 if (viewMatrixBtn) viewMatrixBtn.classList.add('active');
+                if (viewMatrixBtn) viewMatrixBtn.setAttribute('aria-pressed', 'true');
                 if (matrixContainer) matrixContainer.classList.remove('hidden');
                 renderMatrixTable();
             } else if (mode === 'pcan') {
                 if (viewPcanBtn) viewPcanBtn.classList.add('active');
+                if (viewPcanBtn) viewPcanBtn.setAttribute('aria-pressed', 'true');
                 if (pcanContainer) pcanContainer.classList.remove('hidden');
             } else if (mode === 'validation') {
                 if (viewValidationBtn) viewValidationBtn.classList.add('active');
+                if (viewValidationBtn) viewValidationBtn.setAttribute('aria-pressed', 'true');
                 if (validationContainer) validationContainer.classList.remove('hidden');
                 refreshValidation();
             }
@@ -2101,10 +2297,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // START GENERATOR
         startGeneratorBtn.addEventListener('click', async () => {
+            if (!validateRunConfiguration()) return;
             if (!state.isConnected) {
                 const port = comPortSelect.value;
                 if (!port) {
-                    alert('Please select a valid COM port and connect first.');
+                    showFeedback('Select the STM32 serial port before starting.');
                     return;
                 }
                 try {
@@ -2120,19 +2317,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         connectBtn.innerHTML = '<span class="btn-icon">🔌</span><span class="btn-text">Disconnect</span>';
                         connectBtn.classList.replace('primary-btn', 'stop-btn');
                         connStatusPill.className = 'status-pill online';
-                        connStatusPill.innerHTML = '<span class="status-dot"></span><span class="status-label">ONLINE: ' + port + '</span>';
+                        connStatusPill.querySelector('.status-label').textContent = `ONLINE: ${port}`;
                     } else {
                         throw new Error(cData.detail || 'Connection failed');
                     }
                 } catch (err) {
-                    alert('Connection Error: ' + err.message);
+                    showFeedback('Connection error: ' + err.message);
                     return;
                 }
-            }
-
-            if (state.selectedSpns.size === 0) {
-                alert('Please select at least one SPN to generate.');
-                return;
             }
 
             try {
@@ -2140,11 +2332,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 startGeneratorBtn.classList.add('pressed');
 
                 // 1. Keep firmware CAN bitrate in sync with the UI before every run
-                await fetch('/api/baud', {
+                const baudRes = await fetch('/api/baud', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ baud_kbps: state.canBaudKbps })
                 });
+                if (!baudRes.ok) throw new Error('Could not set CAN bitrate.');
 
                 // 2. Build configuration payload
                 const signals = buildActiveSignalsPayload();
@@ -2171,9 +2364,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 isGeneratorRunning = true;
                 pcanSimulationStartTime = Date.now();
-                statActivePgnsEl.textContent = state.selectedSpns.size;
+                statActivePgnsEl.textContent = new Set(state.spns.filter(s => state.selectedSpns.has(s.spn)).map(s => s.pgn)).size;
+                showFeedback('Generator started. Open Validate to follow TX ↔ RX results.', 'success');
+                setSection('validate');
             } catch (err) {
-                alert('Launch Error: ' + err.message);
+                showFeedback('Start failed: ' + err.message);
             } finally {
                 startGeneratorBtn.disabled = false;
                 startGeneratorBtn.classList.remove('pressed');
@@ -2182,12 +2377,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // STOP GENERATOR
         stopGeneratorBtn.addEventListener('click', async () => {
-            isGeneratorRunning = false;
-            if (!state.isConnected) return;
+            if (!state.isConnected) {
+                showFeedback('Connect the device before sending Stop.');
+                return;
+            }
             try {
-                await fetch('/api/stop', { method: 'POST' });
+                const res = await fetch('/api/stop', { method: 'POST' });
+                if (!res.ok) throw new Error('Device did not accept Stop.');
+                isGeneratorRunning = false;
+                showFeedback('Stop command sent.', 'success');
             } catch (err) {
-                console.error(err);
+                showFeedback('Stop failed: ' + err.message);
             }
         });
 
@@ -2294,7 +2494,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
             } catch (err) {
-                alert('DBC Download Error: ' + err.message);
+                showFeedback('DBC download failed: ' + err.message);
             } finally {
                 downloadActiveDbcBtn.disabled = false;
                 downloadActiveDbcBtn.classList.remove('pressed');
@@ -2321,7 +2521,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
             } catch (err) {
-                alert('DBC Download Error: ' + err.message);
+                showFeedback('DBC download failed: ' + err.message);
             } finally {
                 downloadFullDbcBtn.disabled = false;
                 downloadFullDbcBtn.classList.remove('pressed');
@@ -2329,10 +2529,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // 3. Preview DBC Button & Modal Logic
+        let dbcModalTrigger = null;
+        function closeDbcModal() {
+            dbcModal.classList.add('hidden');
+            if (dbcModalTrigger) dbcModalTrigger.focus();
+        }
         previewDbcBtn.addEventListener('click', async () => {
             const signals = buildActiveSignalsPayload();
             dbcCodeBlock.textContent = 'Generating standard Vector DBC syntax...';
+            dbcModalTrigger = document.activeElement;
             dbcModal.classList.remove('hidden');
+            closeDbcModalBtn.focus();
 
             try {
                 const res = await fetch('/api/dbc/generate', {
@@ -2354,7 +2561,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     dbcCodeBlock.textContent = data.dbc_text;
                     dbcMetaScope.textContent = `Scope: Active (${data.total_signals} SPNs)`;
                     dbcMetaSignals.textContent = `Signals: ${data.total_signals}`;
-                    dbcMetaTiming.textContent = `Timing: ${state.timingMode === 1 ? 'Stress Test' : 'SAE Standard'}`;
+                    dbcMetaTiming.textContent = `Timing: ${['Smooth', 'SAE', 'Stress'][state.timingMode]}`;
                     dbcMetaBaud.textContent = `Baud: ${state.canBaudKbps} kbps`;
                 } else {
                     throw new Error('DBC generation failed');
@@ -2364,13 +2571,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        closeDbcModalBtn.addEventListener('click', () => {
-            dbcModal.classList.add('hidden');
-        });
+        closeDbcModalBtn.addEventListener('click', closeDbcModal);
 
         dbcModal.addEventListener('click', (e) => {
-            if (e.target === dbcModal) {
-                dbcModal.classList.add('hidden');
+            if (e.target === dbcModal) closeDbcModal();
+        });
+        dbcModal.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeDbcModal();
+            }
+            if (e.key !== 'Tab') return;
+            const controls = Array.from(dbcModal.querySelectorAll('button:not(:disabled)'));
+            const first = controls[0], last = controls[controls.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
             }
         });
 
@@ -2407,7 +2626,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const cmd = manualCmdInput.value.trim();
             if (!cmd) return;
             if (!state.isConnected) {
-                alert('Please connect device first.');
+                showFeedback('Connect the device before sending a serial command.');
                 return;
             }
             await fetch('/api/send_raw', {
